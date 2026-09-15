@@ -1,0 +1,8 @@
+{
+  "name": "Compta Flow",
+  "description": "Interface d'accueil et shell applicatif pour les agents IA de Compta Flow.",
+  "requestFramePermissions": [
+    "microphone"
+  ],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
