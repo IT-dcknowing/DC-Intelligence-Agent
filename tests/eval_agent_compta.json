@@ -1,0 +1,119 @@
+[
+  {
+    "id": "T001",
+    "description": "Achat de marchandises à crédit, TVA 18%",
+    "input": "Facture SOCIDA N°FAC-2026-0045. Achat de pièces de rechange 100 000 FCFA HT. TVA 18% = 18 000 FCFA. TTC = 118 000 FCFA. Règlement à 30 jours.",
+    "ecriture_attendue": [
+      { "compte": "601100", "debit": 100000, "credit": 0 },
+      { "compte": "4452", "debit": 18000, "credit": 0 },
+      { "compte": "401100", "debit": 0, "credit": 118000 }
+    ],
+    "journal_attendu": "ACH",
+    "criteres": ["equilibre", "comptes_valides", "journal_correct"]
+  },
+  {
+    "id": "T002",
+    "description": "Facture électricité SODECI / CIE (fourniture non stockable)",
+    "input": "Facture CIE N°ELEC-8892 du 10/03/2026. Consommation électricité usine 45 000 FCFA HT + TVA 9% (4 050 FCFA) = 49 050 FCFA TTC.",
+    "ecriture_attendue": [
+      { "compte": "6052", "debit": 45000, "credit": 0 },
+      { "compte": "4452", "debit": 4050, "credit": 0 },
+      { "compte": "401100", "debit": 0, "credit": 49050 }
+    ],
+    "journal_attendu": "ACH",
+    "criteres": ["equilibre", "comptes_valides"]
+  },
+  {
+    "id": "T003",
+    "description": "Acquisition matériel informatique > 50 000 FCFA (Immobilisation)",
+    "input": "Facture Micro-Ivoire N°MI-441. Achat d'un ordinateur portable Dell XPS 350 000 FCFA HT + TVA 18% (63 000 FCFA) = 413 000 FCFA TTC.",
+    "ecriture_attendue": [
+      { "compte": "244", "debit": 350000, "credit": 0 },
+      { "compte": "4451", "debit": 63000, "credit": 0 },
+      { "compte": "401100", "debit": 0, "credit": 413000 }
+    ],
+    "journal_attendu": "ACH",
+    "criteres": ["equilibre", "seuil_immo", "compte_immo"]
+  },
+  {
+    "id": "T004",
+    "description": "Achat petit matériel < 50 000 FCFA (Charge courante)",
+    "input": "Facture Librairie de France N°LF-12. Achat de 2 agrafeuses et clés USB pour 32 000 FCFA TTC.",
+    "ecriture_attendue": [
+      { "compte": "6056", "debit": 32000, "credit": 0 },
+      { "compte": "401100", "debit": 0, "credit": 32000 }
+    ],
+    "journal_attendu": "ACH",
+    "criteres": ["equilibre", "seuil_charge"]
+  },
+  {
+    "id": "T005",
+    "description": "Rémunération du gérant majoritaire (Compte 6622 obligatoire)",
+    "input": "Bulletin de rémunération du gérant associé unique M. Konan pour mars 2026 : Montant 1 200 000 FCFA.",
+    "ecriture_attendue": [
+      { "compte": "6622", "debit": 1200000, "credit": 0 },
+      { "compte": "421", "debit": 0, "credit": 1200000 }
+    ],
+    "journal_attendu": "OD",
+    "criteres": ["equilibre", "compte_gerant_6622"]
+  },
+  {
+    "id": "T006",
+    "description": "Paie personnel salarié (6611, CNPS, ITS)",
+    "input": "Livre de paie mars 2026. Salaires bruts : 800 000 FCFA. CNPS salarié (431) : 48 000 FCFA, Retenue ITS (4471) : 32 000 FCFA. Net à payer : 720 000 FCFA.",
+    "ecriture_attendue": [
+      { "compte": "6611", "debit": 800000, "credit": 0 },
+      { "compte": "431", "debit": 0, "credit": 48000 },
+      { "compte": "4471", "debit": 0, "credit": 32000 },
+      { "compte": "421", "debit": 0, "credit": 720000 }
+    ],
+    "journal_attendu": "OD",
+    "criteres": ["equilibre", "comptes_valides"]
+  },
+  {
+    "id": "T007",
+    "description": "Vente de marchandises à crédit avec TVA 18%",
+    "input": "Facture Vente N°FC-2026-90. Client SITARA. Vente de matériaux 500 000 FCFA HT + TVA 18% (90 000 FCFA) = 590 000 FCFA TTC.",
+    "ecriture_attendue": [
+      { "compte": "411100", "debit": 590000, "credit": 0 },
+      { "compte": "701", "debit": 0, "credit": 500000 },
+      { "compte": "4431", "debit": 0, "credit": 90000 }
+    ],
+    "journal_attendu": "VTE",
+    "criteres": ["equilibre", "journal_correct"]
+  },
+  {
+    "id": "T008",
+    "description": "Vente à l'exportation (TVA 0% / Exonéré)",
+    "input": "Facture Vente N°EXP-04. Client BOLLORE BURKINA. Vente de cacao transformé 4 000 000 FCFA HT (Exportation exonérée de TVA).",
+    "ecriture_attendue": [
+      { "compte": "411100", "debit": 4000000, "credit": 0 },
+      { "compte": "701", "debit": 0, "credit": 4000000 }
+    ],
+    "journal_attendu": "VTE",
+    "criteres": ["equilibre", "tva_zero"]
+  },
+  {
+    "id": "T009",
+    "description": "Honoraires avocat / expert-comptable (Prestataire)",
+    "input": "Facture Cabinet Juridique Me Diallo N°HON-102. Honoraires d'assistance fiscale 200 000 FCFA HT + TVA 18% (36 000 FCFA) = 236 000 FCFA TTC.",
+    "ecriture_attendue": [
+      { "compte": "632", "debit": 200000, "credit": 0 },
+      { "compte": "4453", "debit": 36000, "credit": 0 },
+      { "compte": "401100", "debit": 0, "credit": 236000 }
+    ],
+    "journal_attendu": "ACH",
+    "criteres": ["equilibre", "compte_tva_services"]
+  },
+  {
+    "id": "T010",
+    "description": "Règlement fournisseur par virement bancaire Ecobank",
+    "input": "Avis de débit Ecobank N°ADV-88. Règlement facture Fournisseur SOCIDA pour 118 000 FCFA.",
+    "ecriture_attendue": [
+      { "compte": "401100", "debit": 118000, "credit": 0 },
+      { "compte": "521100", "debit": 0, "credit": 118000 }
+    ],
+    "journal_attendu": "BQ",
+    "criteres": ["equilibre", "pas_debit_6xx_bq"]
+  }
+]

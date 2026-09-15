@@ -71,24 +71,25 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
   const handleCreateDefaultResource = () => {
     const defaultName =
       selectedIntegration.id === 'google-sheets'
-        ? `Compta Flow - Journal Général ${new Date().getFullYear()}.gsheet`
-        : `Compta Flow - Rapport Financier ${new Date().getFullYear()}.gdoc`;
+        ? `DC Intelligence - Journal Général ${new Date().getFullYear()}.gsheet`
+        : `DC Intelligence - Rapport Financier ${new Date().getFullYear()}.gdoc`;
     onSetTargetResource(selectedIntegration.id, defaultName);
     setFeedbackNotice(`Nouveau fichier configuré : ${defaultName}`);
     setTimeout(() => setFeedbackNotice(null), 3000);
   };
 
   return (
-    <div className="flex-1 flex h-full min-w-0 overflow-hidden bg-white font-['Montserrat']">
+    <div className="flex-1 flex h-full min-w-0 overflow-hidden bg-white" style={{ fontFamily: "'Inter', sans-serif" }}>
       {/* ==================================================================== */}
       {/* COLONNE CENTRALE : LISTE DES INTÉGRATIONS DISPONIBLES                */}
       {/* ==================================================================== */}
       <aside
         id="connections-list-sidebar"
-        className="w-[290px] md:w-[320px] h-full border-r border-[#E2E8F0] bg-[#F8FAFC] flex flex-col shrink-0 select-none z-10"
+        className="w-[290px] md:w-[320px] h-full flex flex-col shrink-0 select-none z-10"
+        style={{ borderRight: '1px solid #E5E5E7', background: '#FAFAFA' }}
       >
         {/* Header */}
-        <div className="p-4 border-b border-[#E2E8F0] bg-white space-y-1">
+        <div className="p-4 space-y-1" style={{ borderBottom: '1px solid #E5E5E7', background: '#fff' }}>
           <div className="flex items-center gap-2">
             <div className="w-7 h-7 rounded-lg bg-black text-white flex items-center justify-center font-bold text-xs shadow-xs">
               <Layers className="w-4 h-4" />

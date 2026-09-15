@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { CheckCircle2, AlertCircle, AlertTriangle, Info, X } from 'lucide-react';
+import { Check, AlertCircle, AlertTriangle, Info, X } from 'lucide-react';
 import { ToastMessage } from '../types';
 
 interface ToastItemProps {
@@ -13,52 +13,52 @@ const ToastItem: React.FC<ToastItemProps> = ({ toast, onDismiss }) => {
   useEffect(() => {
     const startTime = Date.now();
     const duration = 4000;
-
     const interval = setInterval(() => {
       const elapsed = Date.now() - startTime;
       const remaining = Math.max(0, 100 - (elapsed / duration) * 100);
       setProgress(remaining);
-      if (remaining <= 0) {
-        clearInterval(interval);
-        onDismiss(toast.id);
-      }
+      if (remaining <= 0) { clearInterval(interval); onDismiss(toast.id); }
     }, 50);
-
     return () => clearInterval(interval);
   }, [toast.id, onDismiss]);
 
+  // Acme/shadcn: all toasts dark/monochrome
   const config = {
     success: {
-      icon: CheckCircle2,
-      border: 'border-[#10B981]/30',
-      bg: 'bg-white',
-      accent: '#10B981',
-      text: 'text-[#10B981]',
-      progressBg: 'bg-[#10B981]',
+      icon: Check,
+      bg: '#09090B',
+      iconColor: '#fff',
+      titleColor: '#fff',
+      msgColor: '#A1A1AA',
+      progressBg: '#3F3F46',
+      progressFill: '#71717A',
     },
     error: {
       icon: AlertCircle,
-      border: 'border-[#EF4444]/30',
-      bg: 'bg-white',
-      accent: '#EF4444',
-      text: 'text-[#EF4444]',
-      progressBg: 'bg-[#EF4444]',
+      bg: '#18181B',
+      iconColor: '#fff',
+      titleColor: '#fff',
+      msgColor: '#A1A1AA',
+      progressBg: '#27272A',
+      progressFill: '#71717A',
     },
     warning: {
       icon: AlertTriangle,
-      border: 'border-[#F59E0B]/30',
-      bg: 'bg-white',
-      accent: '#F59E0B',
-      text: 'text-[#F59E0B]',
-      progressBg: 'bg-[#F59E0B]',
+      bg: '#27272A',
+      iconColor: '#fff',
+      titleColor: '#fff',
+      msgColor: '#A1A1AA',
+      progressBg: '#3F3F46',
+      progressFill: '#71717A',
     },
     info: {
       icon: Info,
-      border: 'border-black/30',
-      bg: 'bg-white',
-      accent: '#000000',
-      text: 'text-black',
-      progressBg: 'bg-black',
+      bg: '#09090B',
+      iconColor: '#fff',
+      titleColor: '#fff',
+      msgColor: '#A1A1AA',
+      progressBg: '#3F3F46',
+      progressFill: '#52525B',
     },
   }[toast.type];
 
@@ -66,16 +66,35 @@ const ToastItem: React.FC<ToastItemProps> = ({ toast, onDismiss }) => {
 
   return (
     <div
-      className={`relative w-80 sm:w-96 rounded-xl border ${config.border} ${config.bg} shadow-lg overflow-hidden flex flex-col transition-all duration-300 transform translate-y-0 opacity-100`}
+      className="animate-in fade-in"
+      style={{
+        width: 320,
+        background: config.bg,
+        borderRadius: '10px',
+        overflow: 'hidden',
+        display: 'flex',
+        flexDirection: 'column',
+        fontFamily: "'Inter', sans-serif",
+      }}
     >
-      <div className="p-3.5 flex items-start gap-3">
-        <Icon className={`w-5 h-5 ${config.text} shrink-0 mt-0.5`} />
-        <div className="flex-1 min-w-0 pr-2">
-          <h4 className="text-[13px] font-semibold text-[#1E293B] leading-tight">
+      <div style={{ padding: '12px 14px', display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+        <div
+          style={{
+            width: 20, height: 20,
+            borderRadius: '50%',
+            background: 'rgba(255,255,255,0.15)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            flexShrink: 0, marginTop: 1,
+          }}
+        >
+          <Icon style={{ width: 11, height: 11, color: config.iconColor, strokeWidth: 2.5 }} />
+        </div>
+        <div style={{ flex: 1, minWidth: 0, paddingRight: 8 }}>
+          <p style={{ fontSize: '13px', fontWeight: 600, color: config.titleColor, lineHeight: 1.4 }}>
             {toast.title}
-          </h4>
+          </p>
           {toast.message && (
-            <p className="text-[12px] text-[#64748B] mt-0.5 leading-relaxed">
+            <p style={{ fontSize: '12px', color: config.msgColor, marginTop: 2, lineHeight: 1.5 }}>
               {toast.message}
             </p>
           )}
@@ -83,17 +102,22 @@ const ToastItem: React.FC<ToastItemProps> = ({ toast, onDismiss }) => {
         <button
           type="button"
           onClick={() => onDismiss(toast.id)}
-          className="text-[#94A3B8] hover:text-[#1E293B] transition-colors p-1"
+          style={{ color: '#52525B', cursor: 'pointer', background: 'none', border: 'none', padding: '2px', lineHeight: 1 }}
+          onMouseEnter={(e) => ((e.currentTarget as HTMLElement).style.color = '#fff')}
+          onMouseLeave={(e) => ((e.currentTarget as HTMLElement).style.color = '#52525B')}
         >
-          <X className="w-3.5 h-3.5" />
+          <X style={{ width: 13, height: 13 }} />
         </button>
       </div>
-
       {/* Progress bar */}
-      <div className="w-full bg-[#E2E8F0] h-[3px]">
+      <div style={{ width: '100%', height: 2, background: config.progressBg }}>
         <div
-          className={`h-full ${config.progressBg} transition-all duration-75`}
-          style={{ width: `${progress}%` }}
+          style={{
+            height: '100%',
+            width: `${progress}%`,
+            background: config.progressFill,
+            transition: 'width 75ms linear',
+          }}
         />
       </div>
     </div>
@@ -107,11 +131,10 @@ interface ToastContainerProps {
 
 export const ToastContainer: React.FC<ToastContainerProps> = ({ toasts, onDismiss }) => {
   if (toasts.length === 0) return null;
-
   return (
     <div
       id="toast-notifications-container"
-      className="fixed top-4 right-4 z-50 flex flex-col gap-2.5 pointer-events-auto"
+      style={{ position: 'fixed', top: 16, right: 16, zIndex: 9999, display: 'flex', flexDirection: 'column', gap: 8, pointerEvents: 'auto' }}
     >
       {toasts.map((toast) => (
         <ToastItem key={toast.id} toast={toast} onDismiss={onDismiss} />

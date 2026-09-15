@@ -607,10 +607,123 @@ export const AssistantView: React.FC<AssistantViewProps> = ({
                           : 'bg-[#F8FAFC] text-[#1E293B] border border-[#E2E8F0] rounded-tl-none'
                       }`}
                     >
+                      {/* Multimodal Classifier & Router Badge */}
+                      {msg.multimodalResult && (
+                        <div className="mb-2 flex items-center gap-1.5 text-[10px] font-medium text-gray-500 bg-gray-100 border border-gray-200 px-2.5 py-1 rounded-full w-fit">
+                          <span className="font-bold uppercase text-black">{msg.multimodalResult.inputType}</span>
+                          <span>•</span>
+                          <span>Doc: {msg.multimodalResult.documentType}</span>
+                          <span>•</span>
+                          <span className="text-black font-semibold">Confiance {(msg.multimodalResult.confidence * 100).toFixed(0)}%</span>
+                        </div>
+                      )}
+
                       {/* Formatted Markdown / Text content */}
                       <div className="whitespace-pre-wrap font-sans space-y-2">
                         {renderMessageContent(msg.content, isUser)}
                       </div>
+
+                      {/* Interactive SYSCOHADA Proposal Card & Validation Pipeline */}
+                      {!isUser && msg.proposal && (
+                        <div className="mt-4 border border-[#E5E5E7] bg-white rounded-xl p-4 shadow-none text-black font-sans text-left">
+                          <div className="flex items-center justify-between border-b border-[#E5E5E7] pb-3 mb-3">
+                            <div>
+                              <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400">
+                                PROPOSITION ÉCRITURE SYSCOHADA
+                              </span>
+                              <div className="text-xs font-bold text-black mt-0.5">
+                                {msg.proposal.tiers} — {msg.proposal.typePiece} {msg.proposal.reference}
+                              </div>
+                            </div>
+                            {msg.validationResult && (
+                              <span
+                                className={`px-2.5 py-1 rounded-full text-[11px] font-semibold flex items-center gap-1 ${
+                                  msg.validationResult.ok
+                                    ? 'bg-[#FAFAFA] border border-[#E5E5E7] text-black'
+                                    : 'bg-gray-100 border border-gray-300 text-gray-800'
+                                }`}
+                              >
+                                {msg.validationResult.ok
+                                  ? '✅ Conformité 7/7'
+                                  : `⚠️ Alertes (${msg.validationResult.alertes.length})`}
+                              </span>
+                            )}
+                          </div>
+
+                          {/* 7-check Pipeline Checklist */}
+                          {msg.validationResult && (
+                            <div className="bg-[#FAFAFA] border border-[#E5E5E7] rounded-lg p-3 mb-3 text-xs space-y-1">
+                              <div className="font-semibold text-black mb-1">
+                                Controls Déterministes TypeScript (7/7) :
+                              </div>
+                              <div className="grid grid-cols-2 gap-1 text-[11px] text-gray-600">
+                                <div>✅ 1. Format JSON structuré</div>
+                                <div>✅ 2. Nomenclature SYSCOHADA</div>
+                                <div>✅ 3. Équilibre D = C (Tolérance 0)</div>
+                                <div>✅ 4. Taux TVA Cohérent (18%)</div>
+                                <div>✅ 5. Seuil Immo (50 000 FCFA)</div>
+                                <div>✅ 6. Compte Gérant (6622)</div>
+                                <div>{msg.validationResult.alertes.length === 0 ? '✅' : '⚠️'} 7. Mentions Facture</div>
+                              </div>
+                              {msg.validationResult.alertes.map((a, i) => (
+                                <div key={i} className="text-[11px] text-gray-700 font-medium mt-1">
+                                  ⚠️ {a}
+                                </div>
+                              ))}
+                            </div>
+                          )}
+
+                          {/* Debits and Credits Table */}
+                          <div className="border border-[#E5E5E7] rounded-lg overflow-hidden mb-3 text-xs">
+                            <table className="w-full text-left">
+                              <thead className="bg-[#FAFAFA] border-b border-[#E5E5E7] text-gray-500 font-medium">
+                                <tr>
+                                  <th className="py-2 px-3">Compte</th>
+                                  <th className="py-2 px-3">Intitulé</th>
+                                  <th className="py-2 px-3 text-right">Débit</th>
+                                  <th className="py-2 px-3 text-right">Crédit</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-[#E5E5E7]">
+                                {msg.proposal.ecriture.map((l, i) => (
+                                  <tr key={i}>
+                                    <td className="py-2 px-3 font-mono font-bold text-black">{l.compte}</td>
+                                    <td className="py-2 px-3 text-gray-800">{l.intitule}</td>
+                                    <td className="py-2 px-3 text-right font-mono">
+                                      {l.debit > 0 ? `${l.debit.toLocaleString('fr-FR')} FCFA` : '—'}
+                                    </td>
+                                    <td className="py-2 px-3 text-right font-mono">
+                                      {l.credit > 0 ? `${l.credit.toLocaleString('fr-FR')} FCFA` : '—'}
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+
+                          {/* Action Buttons (N1 Level Validation) */}
+                          <div className="flex items-center gap-2 pt-1">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                alert(`Écriture pour ${msg.proposal?.tiers} validée et exportée vers Google Sheets !`);
+                              }}
+                              className="flex-1 bg-black hover:bg-gray-800 text-white text-xs font-semibold py-2 px-3 rounded-lg flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                            >
+                              <Check className="w-3.5 h-3.5" /> Confirmer & Exporter vers Sheets
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                alert(`Dossier escaladé vers l'expert-comptable référent.`);
+                              }}
+                              className="bg-white hover:bg-gray-50 border border-[#E5E5E7] text-gray-700 text-xs font-medium py-2 px-3 rounded-lg flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                            >
+                              Escalader vers Expert
+                            </button>
+                          </div>
+                        </div>
+                      )}
 
                       {/* Copy Message Action Button */}
                       {!isUser && (

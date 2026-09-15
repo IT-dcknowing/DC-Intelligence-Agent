@@ -113,42 +113,56 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   return (
     <div
       id="settings-container"
-      className="flex-1 flex flex-col h-full bg-white relative min-w-0 overflow-y-auto font-['Montserrat']"
+      className="flex-1 flex flex-col h-full bg-white relative min-w-0 overflow-y-auto"
+      style={{ fontFamily: "'Inter', sans-serif" }}
     >
       {/* Top Header */}
-      <div className="px-6 sm:px-8 py-5 border-b border-[#E2E8F0] bg-white sticky top-0 z-10 backdrop-blur-md flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+      <div
+        className="px-6 sm:px-8 py-5 bg-white sticky top-0 z-10 flex flex-col sm:flex-row sm:items-center justify-between gap-4"
+        style={{ borderBottom: '1px solid #E5E5E7' }}
+      >
         <div>
-          <h1 className="text-[20px] font-bold text-[#1E293B] tracking-tight">
-            Paramètres du Studio
+          <h1 className="font-bold tracking-tight" style={{ fontSize: '22px', color: '#09090B' }}>
+            Paramètres
           </h1>
-          <p className="text-[13px] text-[#64748B] mt-0.5">
-            Gestion des clés API des modèles de langage et réglages de l'Assistant
+          <p style={{ fontSize: '12px', color: '#71717A', marginTop: '2px' }}>
+            Clés API et catalogue de modèles LLM
           </p>
         </div>
 
-        {/* Sub-Tabs: Clés API / Modèles LLM */}
-        <div className="flex p-1 bg-[#F1F5F9] rounded-xl border border-[#E2E8F0] self-start sm:self-auto">
+        {/* Sub-Tabs: capsule Acme style */}
+        <div className="flex items-center gap-1 self-start sm:self-auto" style={{ padding: '3px', background: '#F4F4F5', borderRadius: '8px', border: '1px solid #E5E5E7' }}>
           <button
             type="button"
             onClick={() => setSelectedSubTab('api-keys')}
-            className={`px-4 py-1.5 rounded-lg text-[12px] font-semibold transition-all cursor-pointer ${
-              selectedSubTab === 'api-keys'
-                ? 'bg-white text-[#1E293B] shadow-xs'
-                : 'text-[#64748B] hover:text-[#1E293B]'
-            }`}
+            className="cursor-pointer transition-all"
+            style={{
+              padding: '5px 14px',
+              borderRadius: '6px',
+              fontSize: '12px',
+              fontWeight: 600,
+              background: selectedSubTab === 'api-keys' ? '#000' : 'transparent',
+              color: selectedSubTab === 'api-keys' ? '#fff' : '#71717A',
+              border: 'none',
+            }}
           >
-            Fournisseurs & Clés API
+            Clés API
           </button>
           <button
             type="button"
             onClick={() => setSelectedSubTab('models')}
-            className={`px-4 py-1.5 rounded-lg text-[12px] font-semibold transition-all cursor-pointer ${
-              selectedSubTab === 'models'
-                ? 'bg-white text-[#1E293B] shadow-xs'
-                : 'text-[#64748B] hover:text-[#1E293B]'
-            }`}
+            className="cursor-pointer transition-all"
+            style={{
+              padding: '5px 14px',
+              borderRadius: '6px',
+              fontSize: '12px',
+              fontWeight: 600,
+              background: selectedSubTab === 'models' ? '#000' : 'transparent',
+              color: selectedSubTab === 'models' ? '#fff' : '#71717A',
+              border: 'none',
+            }}
           >
-            Modèles LLM du Studio ({models.length})
+            Modèles ({models.length})
           </button>
         </div>
       </div>
@@ -169,9 +183,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 </p>
               </div>
 
-              <div className="flex items-center gap-1.5 text-[11px] font-mono text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-full border border-emerald-200">
-                <ShieldCheck className="w-3.5 h-3.5" />
-                <span>Chiffrement local</span>
+              <div className="flex items-center gap-1.5" style={{ fontSize: '11px', fontFamily: 'monospace', color: '#52525B', background: '#F4F4F5', border: '1px solid #E5E5E7', borderRadius: '99px', padding: '3px 10px' }}>
+                <ShieldCheck style={{ width: 12, height: 12, strokeWidth: 1.75 }} />
+                <span>Stockage local</span>
               </div>
             </div>
 
@@ -188,12 +202,15 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   <div
                     key={provider}
                     id={`api-card-${provider}`}
-                    className="p-5 rounded-2xl border border-[#E2E8F0] bg-[#F8FAFC] flex flex-col justify-between space-y-4 hover:border-[#CBD5E1] transition-all"
+                    className="flex flex-col justify-between space-y-4"
+                    style={{ padding: '18px', borderRadius: '12px', border: '1px solid #E5E5E7', background: '#fff', transition: 'border-color 150ms' }}
+                    onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.borderColor = '#D4D4D8'; }}
+                    onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.borderColor = '#E5E5E7'; }}
                   >
                     <div>
                       <div className="flex items-start justify-between gap-2">
                         <div className="flex items-center gap-2.5">
-                          <div className="w-8 h-8 rounded-xl bg-white border border-[#E2E8F0] flex items-center justify-center text-[#1E293B] shadow-2xs font-bold text-xs">
+                          <div className="flex items-center justify-center font-bold" style={{ width: 30, height: 30, borderRadius: '8px', background: '#09090B', color: '#fff', fontSize: '11px', flexShrink: 0 }}>
                             {provider === 'openrouter' ? 'OR' : provider === 'anthropic' ? 'CL' : provider === 'deepseek' ? 'DS' : 'GQ'}
                           </div>
                           <div>
@@ -206,20 +223,15 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                           </div>
                         </div>
 
-                        {/* Status Badge */}
+                        {/* Status Badge — monochrome */}
                         <span
-                          className={`inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full ${
-                            isConfigured
-                              ? 'bg-emerald-100 text-emerald-800'
-                              : 'bg-zinc-200 text-zinc-600'
-                          }`}
+                          className="inline-flex items-center gap-1"
+                          style={{ fontSize: '11px', fontWeight: 500, padding: '2px 8px', background: '#F4F4F5', border: '1px solid #E5E5E7', borderRadius: '99px', color: '#52525B' }}
                         >
                           <span
-                            className={`w-1.5 h-1.5 rounded-full ${
-                              isConfigured ? 'bg-emerald-600' : 'bg-zinc-400'
-                            }`}
+                            style={{ width: 5, height: 5, borderRadius: '50%', background: isConfigured ? '#71717A' : '#D4D4D8', display: 'inline-block' }}
                           />
-                          <span>{isConfigured ? 'Prêt' : 'Non renseigné'}</span>
+                          <span>{isConfigured ? 'Configuré' : 'Vide'}</span>
                         </span>
                       </div>
 
@@ -229,7 +241,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     </div>
 
                     {/* Input field + Save action */}
-                    <div className="space-y-2 pt-2 border-t border-[#E2E8F0]/70">
+                    <div className="space-y-2 pt-3" style={{ borderTop: '1px solid #F4F4F5' }}>
                       <div className="relative flex items-center">
                         <input
                           type={isRevealed ? 'text' : 'password'}
@@ -237,8 +249,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                           onChange={(e) =>
                             setKeyDrafts((prev) => ({ ...prev, [provider]: e.target.value }))
                           }
-                          placeholder={config.placeholder || 'Entrez votre clé secrète...'}
-                          className="w-full pl-3 pr-10 py-2 text-[12px] font-mono bg-white border border-[#E2E8F0] rounded-xl text-[#1E293B] focus:outline-none focus:border-black placeholder:text-[#94A3B8]"
+                          placeholder={config.placeholder || 'sk-...'}
+                          style={{ width: '100%', paddingLeft: 10, paddingRight: 36, paddingTop: 8, paddingBottom: 8, fontSize: '12px', fontFamily: 'monospace', background: '#FAFAFA', border: '1px solid #E5E5E7', borderRadius: '8px', color: '#09090B', outline: 'none' }}
+                          onFocus={(e) => { (e.currentTarget as HTMLElement).style.borderColor = '#000'; (e.currentTarget as HTMLElement).style.background = '#fff'; }}
+                          onBlur={(e) => { (e.currentTarget as HTMLElement).style.borderColor = '#E5E5E7'; (e.currentTarget as HTMLElement).style.background = '#FAFAFA'; }}
                         />
 
                         <button
@@ -270,15 +284,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                         <button
                           type="button"
                           onClick={() => handleKeySave(provider)}
-                          className={`px-3.5 py-1.5 rounded-lg text-[12px] font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${
-                            isSaved
-                              ? 'bg-emerald-600 text-white'
-                              : 'bg-black hover:bg-zinc-800 text-white shadow-2xs'
-                          }`}
+                          className="flex items-center gap-1.5 cursor-pointer transition-all"
+                          style={{ padding: '6px 13px', background: '#000', color: '#fff', border: '1px solid #000', borderRadius: '7px', fontSize: '12px', fontWeight: 600 }}
+                          onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = '#18181B'; }}
+                          onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = '#000'; }}
                         >
                           {isSaved ? (
                             <>
-                              <Check className="w-3.5 h-3.5" />
+                              <Check style={{ width: 12, height: 12, strokeWidth: 2.5 }} />
                               <span>Enregistré</span>
                             </>
                           ) : (
@@ -334,48 +347,53 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             </div>
 
             {/* Models Table */}
-            <div className="border border-[#E2E8F0] rounded-2xl overflow-hidden bg-white shadow-2xs">
-              <table className="w-full text-left text-[12px]">
-                <thead className="bg-[#F8FAFC] border-b border-[#E2E8F0] text-[#64748B] font-semibold">
+            <div style={{ border: '1px solid #E5E5E7', borderRadius: '12px', overflow: 'hidden', background: '#fff' }}>
+              <table className="w-full text-left" style={{ fontSize: '12px' }}>
+                <thead style={{ background: '#FAFAFA', borderBottom: '1px solid #E5E5E7' }}>
                   <tr>
-                    <th className="px-4 py-3">Modèle</th>
-                    <th className="px-4 py-3">ID Technique</th>
-                    <th className="px-4 py-3">Fournisseur</th>
-                    <th className="px-4 py-3">Raisonnement</th>
-                    <th className="px-4 py-3">Actions</th>
+                    <th className="px-4 py-3" style={{ color: '#71717A', fontWeight: 500, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Modèle</th>
+                    <th className="px-4 py-3" style={{ color: '#71717A', fontWeight: 500, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>ID</th>
+                    <th className="px-4 py-3" style={{ color: '#71717A', fontWeight: 500, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Fournisseur</th>
+                    <th className="px-4 py-3" style={{ color: '#71717A', fontWeight: 500, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Capacités</th>
+                    <th className="px-4 py-3" style={{ color: '#71717A', fontWeight: 500, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Actions</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-[#E2E8F0]">
-                  {models.map((m) => (
-                    <tr key={m.id} className="hover:bg-[#F8FAFC]/60 transition-colors">
+                <tbody>
+                  {models.map((m, i) => (
+                    <tr
+                      key={m.id}
+                      style={{ borderTop: i === 0 ? 'none' : '1px solid #F4F4F5' }}
+                      onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = '#FAFAFA'; }}
+                      onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
+                    >
                       <td className="px-4 py-3">
-                        <div className="font-semibold text-[#1E293B] flex items-center gap-1.5">
+                        <div className="flex items-center gap-1.5" style={{ fontWeight: 600, fontSize: '13px', color: '#09090B' }}>
                           <span>{m.name}</span>
                           {m.isCustom && (
-                            <span className="text-[10px] bg-zinc-100 text-zinc-700 px-1.5 py-0.5 rounded font-mono">
-                              Personnalisé
+                            <span style={{ fontSize: '10px', background: '#F4F4F5', color: '#52525B', padding: '1px 6px', borderRadius: '4px', fontFamily: 'monospace', border: '1px solid #E5E5E7' }}>
+                              Custom
                             </span>
                           )}
                         </div>
-                        <div className="text-[11px] text-[#64748B] line-clamp-1">{m.description}</div>
+                        <div style={{ fontSize: '11px', color: '#71717A' }} className="line-clamp-1">{m.description}</div>
                       </td>
 
-                      <td className="px-4 py-3 font-mono text-[11px] text-[#475569]">
+                      <td className="px-4 py-3" style={{ fontFamily: 'monospace', fontSize: '11px', color: '#A1A1AA' }}>
                         {m.id}
                       </td>
 
-                      <td className="px-4 py-3 capitalize font-medium text-[#1E293B]">
+                      <td className="px-4 py-3" style={{ fontWeight: 500, fontSize: '12px', color: '#52525B', textTransform: 'capitalize' }}>
                         {m.provider}
                       </td>
 
                       <td className="px-4 py-3">
                         {m.supportsReasoning ? (
-                          <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
-                            <Sparkles className="w-3 h-3" />
-                            <span>Effort configurable</span>
+                          <span className="inline-flex items-center gap-1" style={{ fontSize: '11px', fontWeight: 500, background: '#F4F4F5', border: '1px solid #E5E5E7', borderRadius: '99px', padding: '2px 8px', color: '#52525B' }}>
+                            <Sparkles style={{ width: 11, height: 11, strokeWidth: 1.75 }} />
+                            <span>Raisonnement</span>
                           </span>
                         ) : (
-                          <span className="text-[11px] text-[#94A3B8]">Standard</span>
+                          <span style={{ fontSize: '11px', color: '#A1A1AA' }}>Standard</span>
                         )}
                       </td>
 
@@ -384,13 +402,15 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                           <button
                             type="button"
                             onClick={() => onDeleteCustomModel(m.id)}
-                            title="Supprimer ce modèle personnalisé"
-                            className="p-1 rounded text-red-600 hover:bg-red-50 transition-colors"
+                            title="Supprimer ce modèle"
+                            style={{ padding: '4px', borderRadius: '6px', color: '#71717A', background: 'none', border: 'none', cursor: 'pointer' }}
+                            onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.color = '#09090B'; (e.currentTarget as HTMLElement).style.background = '#F4F4F5'; }}
+                            onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.color = '#71717A'; (e.currentTarget as HTMLElement).style.background = 'none'; }}
                           >
-                            <Trash2 className="w-3.5 h-3.5" />
+                            <Trash2 style={{ width: 13, height: 13 }} />
                           </button>
                         ) : (
-                          <span className="text-[11px] text-[#94A3B8] font-mono">Système</span>
+                          <span style={{ fontSize: '11px', color: '#A1A1AA', fontFamily: 'monospace' }}>Système</span>
                         )}
                       </td>
                     </tr>

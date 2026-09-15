@@ -6,7 +6,9 @@ import {
   ChevronLeft,
   Layers,
   Sparkles,
+  MessageSquare,
   ShieldCheck,
+  Cpu,
 } from 'lucide-react';
 import { NavigationTab } from '../types';
 
@@ -32,16 +34,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
     {
       id: 'nav-assistant-btn',
       tab: 'assistant' as NavigationTab,
-      label: 'Assistant',
-      icon: Sparkles,
+      label: 'Conversations',
+      icon: MessageSquare,
       isActive: isAssistantActive,
-    },
-    {
-      id: 'nav-connections-btn',
-      tab: 'connections' as NavigationTab,
-      label: 'Connexions',
-      icon: Layers,
-      isActive: currentTab === 'connections',
     },
     {
       id: 'nav-agents-btn',
@@ -51,210 +46,280 @@ export const Sidebar: React.FC<SidebarProps> = ({
       isActive: currentTab === 'agents',
     },
     {
+      id: 'nav-tasks-btn',
+      tab: 'tasks' as NavigationTab,
+      label: 'Moteur de Tâches',
+      icon: Cpu,
+      isActive: currentTab === 'tasks',
+    },
+    {
       id: 'nav-knowledge-btn',
       tab: 'knowledge' as NavigationTab,
       label: 'Connaissances',
       icon: BookOpen,
       isActive: currentTab === 'knowledge',
     },
+    {
+      id: 'nav-audit-btn',
+      tab: 'audit' as NavigationTab,
+      label: 'Journal d’Audit',
+      icon: ShieldCheck,
+      isActive: currentTab === 'audit',
+    },
+    {
+      id: 'nav-connections-btn',
+      tab: 'connections' as NavigationTab,
+      label: 'Connexions',
+      icon: Layers,
+      isActive: currentTab === 'connections',
+    },
   ];
 
   return (
     <>
-      {/* 1. Desktop & Tablet Sidebar (Hidden on mobile < 768px) */}
+      {/* ── Desktop Sidebar ── */}
       <aside
         id="app-sidebar"
-        className={`hidden md:flex h-full border-r border-[#E2E8F0] bg-[#F8FAFC] flex-col justify-between shrink-0 select-none z-30 transition-all duration-300 ease-[cubic-bezier(0.4,0,0.2,1)] ${
-          isCollapsed ? 'w-[64px]' : 'w-[240px]'
+        className={`hidden md:flex h-full border-r flex-col justify-between shrink-0 select-none z-30 transition-all duration-300 ease-[cubic-bezier(0.4,0,0.2,1)] ${
+          isCollapsed ? 'w-[60px]' : 'w-[232px]'
         }`}
+        style={{ background: '#FAFAFA', borderColor: '#E5E5E7' }}
       >
-        {/* Top App Identity */}
+        {/* ── Brand header ── */}
         <div>
           <div
             id="sidebar-brand-header"
-            className={`h-16 px-3.5 border-b border-[#E2E8F0] flex items-center ${
+            className={`h-14 px-3 flex items-center border-b ${
               isCollapsed ? 'justify-center' : 'justify-between'
             }`}
+            style={{ borderColor: '#E5E5E7' }}
           >
             {!isCollapsed ? (
               <div className="flex items-center gap-2.5 min-w-0">
-                <div className="w-8 h-8 rounded-lg bg-black text-white flex items-center justify-center font-bold text-sm tracking-tight shadow-sm shrink-0 border border-zinc-800">
-                  CF
+                {/* Logo mark */}
+                <div
+                  className="w-7 h-7 rounded-lg flex items-center justify-center font-bold text-[11px] tracking-tight shrink-0"
+                  style={{ background: '#000', color: '#fff' }}
+                >
+                  DC
                 </div>
                 <div className="min-w-0">
-                  <span className="text-[14px] font-bold text-[#1E293B] tracking-tight block truncate font-['Montserrat']">
-                    Compta Flow
+                  <span
+                    className="block truncate font-bold tracking-tight"
+                    style={{ fontSize: '13px', color: '#09090B' }}
+                  >
+                    DC INTELLIGENCE
                   </span>
-                  <span className="text-[11px] text-[#64748B] block truncate font-medium">
-                    Assistant & Studio OS
+                  <span
+                    className="block truncate"
+                    style={{ fontSize: '11px', color: '#71717A', fontWeight: 500 }}
+                  >
+                    Agent Studio
                   </span>
                 </div>
               </div>
             ) : (
               <div
-                title="Compta Flow"
-                className="w-9 h-9 rounded-lg bg-black text-white flex items-center justify-center font-bold text-sm tracking-tight shadow-sm shrink-0 border border-zinc-800"
+                title="DC INTELLIGENCE"
+                className="w-7 h-7 rounded-lg flex items-center justify-center font-bold text-[11px] tracking-tight shrink-0 cursor-pointer"
+                style={{ background: '#000', color: '#fff' }}
+                onClick={onToggleCollapse}
               >
-                CF
+                DC
               </div>
             )}
 
-            {/* Toggle Chevron with 180deg animated rotation */}
             {!isCollapsed && (
               <button
                 type="button"
                 onClick={onToggleCollapse}
-                title="Replier le menu (64px)"
-                className="w-7 h-7 rounded-lg flex items-center justify-center text-[#64748B] hover:text-[#1E293B] hover:bg-[#E2E8F0]/70 transition-all duration-200 cursor-pointer"
+                title="Replier le menu"
+                className="w-6 h-6 rounded-md flex items-center justify-center transition-colors cursor-pointer"
+                style={{ color: '#A1A1AA' }}
+                onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.color = '#09090B'; (e.currentTarget as HTMLElement).style.background = '#F4F4F5'; }}
+                onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.color = '#A1A1AA'; (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
               >
-                <ChevronLeft className="w-4 h-4 transition-transform duration-300" />
+                <ChevronLeft className="w-3.5 h-3.5" />
               </button>
             )}
           </div>
 
-          {/* If collapsed, small expand button below logo */}
+          {/* Expand button when collapsed */}
           {isCollapsed && (
-            <div className="flex justify-center py-2 border-b border-[#E2E8F0]">
+            <div className="flex justify-center py-2 border-b" style={{ borderColor: '#E5E5E7' }}>
               <button
                 type="button"
                 onClick={onToggleCollapse}
-                title="Déplier le menu (240px)"
-                className="w-7 h-7 rounded-lg flex items-center justify-center text-[#64748B] hover:text-[#1E293B] hover:bg-[#E2E8F0]/70 transition-all duration-200 cursor-pointer"
+                title="Déplier le menu"
+                className="w-6 h-6 rounded-md flex items-center justify-center cursor-pointer"
+                style={{ color: '#A1A1AA' }}
               >
-                <ChevronLeft className="w-4 h-4 rotate-180 transition-transform duration-300" />
+                <ChevronLeft className="w-3.5 h-3.5 rotate-180" />
               </button>
             </div>
           )}
 
-          {/* Navigation Items */}
-          <nav id="sidebar-nav-links" className="p-2 space-y-1 mt-1.5">
+          {/* ── Navigation ── */}
+          <nav id="sidebar-nav-links" className="p-2 space-y-0.5 mt-2">
             {navItems.map((item) => {
               const Icon = item.icon;
-
               return (
                 <button
                   key={item.tab}
                   id={item.id}
                   onClick={() => onSelectTab(item.tab)}
                   title={isCollapsed ? item.label : undefined}
-                  className={`w-full flex items-center rounded-xl text-[13px] font-medium transition-all duration-200 cursor-pointer ${
-                    isCollapsed ? 'justify-center p-3' : 'justify-between px-3.5 py-2.5'
-                  } ${
-                    item.isActive
-                      ? 'bg-black text-white shadow-sm'
-                      : 'text-[#52525B] hover:bg-[#F4F4F5] hover:text-[#09090B]'
+                  className={`w-full flex items-center rounded-lg text-[13px] transition-all duration-150 cursor-pointer ${
+                    isCollapsed ? 'justify-center p-2.5' : 'gap-2.5 px-3 py-2'
                   }`}
+                  style={
+                    item.isActive
+                      ? { background: '#F4F4F5', color: '#09090B', fontWeight: 600 }
+                      : { background: 'transparent', color: '#71717A', fontWeight: 500 }
+                  }
+                  onMouseEnter={(e) => {
+                    if (!item.isActive) {
+                      (e.currentTarget as HTMLElement).style.background = '#F4F4F5';
+                      (e.currentTarget as HTMLElement).style.color = '#09090B';
+                    }
+                  }}
+                  onMouseLeave={(e) => {
+                    if (!item.isActive) {
+                      (e.currentTarget as HTMLElement).style.background = 'transparent';
+                      (e.currentTarget as HTMLElement).style.color = '#71717A';
+                    }
+                  }}
                 >
-                  <div className={`flex items-center ${isCollapsed ? '' : 'gap-3 min-w-0'}`}>
-                    <Icon
-                      className={`w-4 h-4 shrink-0 transition-transform duration-150 ${
-                        item.isActive ? 'text-white stroke-[2.2]' : 'text-[#71717A] stroke-[1.8]'
-                      }`}
-                    />
-                    {!isCollapsed && (
-                      <span className="truncate tracking-tight font-medium transition-opacity duration-200">
-                        {item.label}
-                      </span>
-                    )}
-                  </div>
+                  <Icon
+                    className="shrink-0"
+                    style={{
+                      width: 15,
+                      height: 15,
+                      strokeWidth: item.isActive ? 2.2 : 1.75,
+                      color: item.isActive ? '#09090B' : '#71717A',
+                    }}
+                  />
+                  {!isCollapsed && (
+                    <span className="truncate">{item.label}</span>
+                  )}
                 </button>
               );
             })}
           </nav>
         </div>
 
-        {/* Bottom Settings Link */}
-        <div id="sidebar-bottom-section" className="p-2.5 border-t border-[#E2E8F0] bg-[#F8FAFC] space-y-1">
+        {/* ── Bottom: Settings + User profile ── */}
+        <div
+          id="sidebar-bottom-section"
+          className="p-2 border-t space-y-0.5"
+          style={{ borderColor: '#E5E5E7', background: '#FAFAFA' }}
+        >
+          {/* Settings */}
           <button
             id="nav-settings-btn"
             onClick={() => onSelectTab('settings')}
             title={isCollapsed ? 'Paramètres' : undefined}
-            className={`w-full flex items-center rounded-xl text-[13px] font-medium transition-all duration-200 cursor-pointer ${
-              isCollapsed ? 'justify-center p-3' : 'gap-3 px-3.5 py-2.5'
-            } ${
-              currentTab === 'settings'
-                ? 'bg-black text-white shadow-sm'
-                : 'text-[#52525B] hover:bg-[#F4F4F5] hover:text-[#09090B]'
+            className={`w-full flex items-center rounded-lg text-[13px] transition-all duration-150 cursor-pointer ${
+              isCollapsed ? 'justify-center p-2.5' : 'gap-2.5 px-3 py-2'
             }`}
+            style={
+              currentTab === 'settings'
+                ? { background: '#F4F4F5', color: '#09090B', fontWeight: 600 }
+                : { background: 'transparent', color: '#71717A', fontWeight: 500 }
+            }
+            onMouseEnter={(e) => {
+              if (currentTab !== 'settings') {
+                (e.currentTarget as HTMLElement).style.background = '#F4F4F5';
+                (e.currentTarget as HTMLElement).style.color = '#09090B';
+              }
+            }}
+            onMouseLeave={(e) => {
+              if (currentTab !== 'settings') {
+                (e.currentTarget as HTMLElement).style.background = 'transparent';
+                (e.currentTarget as HTMLElement).style.color = '#71717A';
+              }
+            }}
           >
             <Settings
-              className={`w-4 h-4 shrink-0 ${
-                currentTab === 'settings' ? 'text-white stroke-[2.2]' : 'text-[#71717A] stroke-[1.8]'
-              }`}
+              className="shrink-0"
+              style={{
+                width: 15, height: 15,
+                strokeWidth: currentTab === 'settings' ? 2.2 : 1.75,
+                color: currentTab === 'settings' ? '#09090B' : '#71717A',
+              }}
             />
-            {!isCollapsed && <span className="truncate tracking-tight font-medium">Paramètres</span>}
+            {!isCollapsed && <span className="truncate">Paramètres</span>}
           </button>
 
+          {/* User profile */}
           {!isCollapsed && (
-            <div className="pt-2 px-1 text-[11px] text-[#94A3B8] flex items-center gap-1.5 font-mono">
-              <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-              <span>SYSCOHADA Révisé</span>
+            <div
+              className="mt-1 px-2 py-2 rounded-lg flex items-center gap-2.5"
+              style={{ borderTop: '1px solid #E5E5E7', marginTop: '8px', paddingTop: '10px' }}
+            >
+              {/* Avatar */}
+              <div
+                className="w-7 h-7 rounded-full flex items-center justify-center shrink-0 font-bold"
+                style={{ background: '#18181B', color: '#fff', fontSize: '11px' }}
+              >
+                AM
+              </div>
+              <div className="min-w-0">
+                <span
+                  className="block truncate font-semibold"
+                  style={{ fontSize: '12px', color: '#09090B' }}
+                >
+                  Alex Mardochee
+                </span>
+                <span
+                  className="block truncate"
+                  style={{ fontSize: '11px', color: '#A1A1AA' }}
+                >
+                  alexmardochee0@gmail.com
+                </span>
+              </div>
+            </div>
+          )}
+
+          {isCollapsed && (
+            <div className="flex justify-center py-1">
+              <div
+                className="w-7 h-7 rounded-full flex items-center justify-center font-bold cursor-pointer"
+                style={{ background: '#18181B', color: '#fff', fontSize: '11px' }}
+                title="Alex Mardochee"
+              >
+                AM
+              </div>
             </div>
           )}
         </div>
       </aside>
 
-      {/* 2. Mobile Bottom Navigation Bar (< 768px) */}
+      {/* ── Mobile Bottom Navigation ── */}
       <nav
         id="mobile-bottom-nav"
-        className="md:hidden fixed bottom-0 left-0 right-0 h-16 bg-white/95 backdrop-blur-md border-t border-[#E2E8F0] z-40 flex items-center justify-around px-2 shadow-lg select-none"
+        className="md:hidden fixed bottom-0 left-0 right-0 h-14 bg-white border-t z-40 flex items-center justify-around px-2 select-none"
+        style={{ borderColor: '#E5E5E7' }}
       >
-        <button
-          type="button"
-          onClick={() => onSelectTab('assistant')}
-          className={`flex flex-col items-center justify-center py-1 px-2.5 rounded-lg transition-colors ${
-            isAssistantActive ? 'text-black font-semibold' : 'text-[#71717A]'
-          }`}
-        >
-          <Sparkles className="w-5 h-5 stroke-[2]" />
-          <span className="text-[10px] font-medium mt-1">Assistant</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => onSelectTab('connections')}
-          className={`flex flex-col items-center justify-center py-1 px-2.5 rounded-lg transition-colors ${
-            currentTab === 'connections' ? 'text-black font-semibold' : 'text-[#71717A]'
-          }`}
-        >
-          <Layers className="w-5 h-5 stroke-[2]" />
-          <span className="text-[10px] font-medium mt-1">Connexions</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => onSelectTab('agents')}
-          className={`flex flex-col items-center justify-center py-1 px-2.5 rounded-lg transition-colors ${
-            currentTab === 'agents' ? 'text-black font-semibold' : 'text-[#71717A]'
-          }`}
-        >
-          <Bot className="w-5 h-5 stroke-[2]" />
-          <span className="text-[10px] font-medium mt-1">Agents</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => onSelectTab('knowledge')}
-          className={`flex flex-col items-center justify-center py-1 px-2.5 rounded-lg transition-colors ${
-            currentTab === 'knowledge' ? 'text-black font-semibold' : 'text-[#71717A]'
-          }`}
-        >
-          <BookOpen className="w-5 h-5 stroke-[2]" />
-          <span className="text-[10px] font-medium mt-1">Docs</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => onSelectTab('settings')}
-          className={`flex flex-col items-center justify-center py-1 px-2.5 rounded-lg transition-colors ${
-            currentTab === 'settings' ? 'text-black font-semibold' : 'text-[#71717A]'
-          }`}
-        >
-          <Settings className="w-5 h-5 stroke-[2]" />
-          <span className="text-[10px] font-medium mt-1">Réglages</span>
-        </button>
+        {[
+          { tab: 'assistant' as NavigationTab, icon: MessageSquare, label: 'Chat', active: isAssistantActive },
+          { tab: 'agents' as NavigationTab, icon: Bot, label: 'Agents', active: currentTab === 'agents' },
+          { tab: 'knowledge' as NavigationTab, icon: BookOpen, label: 'Docs', active: currentTab === 'knowledge' },
+          { tab: 'connections' as NavigationTab, icon: Layers, label: 'Liens', active: currentTab === 'connections' },
+          { tab: 'settings' as NavigationTab, icon: Settings, label: 'Config', active: currentTab === 'settings' },
+        ].map(({ tab, icon: Icon, label, active }) => (
+          <button
+            key={tab}
+            type="button"
+            onClick={() => onSelectTab(tab)}
+            className="flex flex-col items-center justify-center py-1 px-2 rounded-lg gap-0.5 transition-colors"
+            style={{ color: active ? '#09090B' : '#A1A1AA' }}
+          >
+            <Icon style={{ width: 18, height: 18, strokeWidth: active ? 2.2 : 1.75 }} />
+            <span style={{ fontSize: '10px', fontWeight: active ? 600 : 400 }}>{label}</span>
+          </button>
+        ))}
       </nav>
     </>
   );
 };
-

@@ -8,6 +8,13 @@ import { KnowledgeBaseView } from './components/KnowledgeBaseView';
 import { SettingsView } from './components/SettingsView';
 import { AddModelModal } from './components/AddModelModal';
 import { ToastContainer } from './components/ToastContainer';
+import { AuditLogView } from './components/AuditLogView';
+import { TaskMonitorView } from './components/TaskMonitorView';
+import { validateAccountingProposal } from './services/accountingValidator';
+import { logAuditInteraction } from './services/auditLog';
+import { classifyAndExtractMultimodalInput } from './services/multimodalClassifier';
+import { routeUserRequest } from './services/routerAgent';
+import { createTask } from './services/taskEngine';
 import {
   Agent,
   ApiKeyConfig,
@@ -17,8 +24,10 @@ import {
   LLMModel,
   LLMProvider,
   NavigationTab,
+  PropositionEcriture,
   ReasoningEffort,
   ToastMessage,
+  ValidationResult,
   WorkspaceIntegration,
 } from './types';
 import {
@@ -65,7 +74,7 @@ export default function App() {
   // Chat Sessions state (User's personal accounting chat history)
   const [chatSessions, setChatSessions] = useState<ChatSession[]>(() => {
     try {
-      const saved = localStorage.getItem('compta_flow_chat_sessions');
+      const saved = localStorage.getItem('dc_intelligence_chat_sessions');
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) return parsed;
@@ -83,7 +92,7 @@ export default function App() {
   // Persist chat sessions to LocalStorage
   useEffect(() => {
     try {
-      localStorage.setItem('compta_flow_chat_sessions', JSON.stringify(chatSessions));
+      localStorage.setItem('dc_intelligence_chat_sessions', JSON.stringify(chatSessions));
     } catch {
       // ignore
     }
@@ -92,7 +101,7 @@ export default function App() {
   // Integrations state (Google Sheets, Google Docs)
   const [integrations, setIntegrations] = useState<WorkspaceIntegration[]>(() => {
     try {
-      const saved = localStorage.getItem('compta_flow_integrations');
+      const saved = localStorage.getItem('dc_intelligence_integrations');
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) return parsed;
@@ -106,7 +115,7 @@ export default function App() {
   // Persist integrations to LocalStorage
   useEffect(() => {
     try {
-      localStorage.setItem('compta_flow_integrations', JSON.stringify(integrations));
+      localStorage.setItem('dc_intelligence_integrations', JSON.stringify(integrations));
     } catch {
       // ignore
     }
@@ -131,7 +140,7 @@ export default function App() {
   });
 
   const [selectedModelId, setSelectedModelId] = useState<string>(() => {
-    return localStorage.getItem('compta_flow_selected_model') || 'deepseek/deepseek-chat';
+    return localStorage.getItem('dc_intelligence_selected_model') || 'deepseek/deepseek-chat';
   });
 
   const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort>('Medium');
@@ -151,7 +160,7 @@ export default function App() {
   // Persist selected model
   useEffect(() => {
     try {
-      localStorage.setItem('compta_flow_selected_model', selectedModelId);
+      localStorage.setItem('dc_intelligence_selected_model', selectedModelId);
     } catch {
       // ignore
     }
@@ -219,11 +228,32 @@ export default function App() {
       timestamp: timeStr,
     };
 
+    // Multimodal Classification & Auto-Routing
+    const multimodalRes = await classifyAndExtractMultimodalInput({ text });
+    const routingRes = routeUserRequest(text, multimodalRes);
+
+    // If routing suggests another agent, switch selectedAgentId automatically
+    if (routingRes.targetAgentId && routingRes.targetAgentId !== selectedAgentId) {
+      setSelectedAgentId(routingRes.targetAgentId);
+    }
+
+    const targetAgent = agents.find((a) => a.id === (routingRes.targetAgentId || selectedAgentId)) || agents[0];
+
+    // Create central Task in Task Engine
+    const currentTask = createTask({
+      agentId: targetAgent.name,
+      action: (targetAgent.allowedActions && targetAgent.allowedActions[0]) || 'PREPARE',
+      input: text,
+      status: 'RUNNING',
+    });
+
+    userMsg.multimodalResult = multimodalRes;
+    userMsg.taskRef = currentTask;
+
     // 1. Update session immediately with user message
     setChatSessions((prev) =>
       prev.map((s) => {
         if (s.id === sessionId) {
-          // If title was default "Nouvelle session X", name it after the question!
           const isDefaultTitle = s.title.startsWith('Nouvelle session');
           const nextTitle = isDefaultTitle
             ? text.slice(0, 32) + (text.length > 32 ? '...' : '')
@@ -249,6 +279,8 @@ export default function App() {
       const history = targetSession ? targetSession.messages : [];
       const modelObj = models.find((m) => m.id === selectedModelId) || models[0];
 
+      const activeAgent = agents.find((a) => a.id === selectedAgentId) || agents[0];
+
       const aiResponseContent = await generateChatResponse({
         model: modelObj,
         conversationHistory: history,
@@ -256,12 +288,65 @@ export default function App() {
         apiKeys,
         reasoningEffort,
         agentContext: {
-          name: 'Compta Flow Assistant',
-          role: 'Assistant Comptable & Fiscal SYSCOHADA',
-          instructions:
-            'Tu es un assistant personnel comptable expert en SYSCOHADA révisé. Fournis les décompositions HT, TVA 18%, TTC, ainsi que les tableaux complets d’écritures avec Compte Débit, Compte Crédit, Libellé et Montants. Propose systématiquement la synchronisation Google Sheets.',
+          name: activeAgent ? activeAgent.name : 'DC Intelligence Assistant',
+          role: activeAgent ? activeAgent.role : 'Assistant Comptable & Fiscal SYSCOHADA',
+          instructions: activeAgent ? activeAgent.instructions : 'Expert Comptable SYSCOHADA Révisé.',
         },
       });
+
+      // Try extracting structured JSON proposal from LLM output
+      let proposal: PropositionEcriture | undefined;
+      let validationResult: ValidationResult | undefined;
+
+      const jsonMatch = aiResponseContent.match(/```json\s*([\s\S]*?)\s*```/);
+      if (jsonMatch && jsonMatch[1]) {
+        try {
+          const parsed = JSON.parse(jsonMatch[1]);
+          if (parsed && (parsed.ecriture || parsed.journal || parsed.tiers)) {
+            proposal = {
+              id: `PROP-${Date.now()}`,
+              typePiece: parsed.typePiece || 'Facture / Pièce',
+              tiers: parsed.tiers || 'Tiers à préciser',
+              date: parsed.date || new Date().toISOString().slice(0, 10),
+              reference: parsed.reference || 'PIECE-REF',
+              montantHT: Number(parsed.montantHT || 0),
+              montantTVA: Number(parsed.montantTVA || 0),
+              montantTTC: Number(parsed.montantTTC || 0),
+              devise: parsed.devise || 'XOF',
+              journal: parsed.journal || 'ACH',
+              ecriture: Array.isArray(parsed.ecriture) ? parsed.ecriture : [],
+              justification: parsed.justification || 'Imputation SYSCOHADA proposée par l’agent.',
+              regleAppliquee: parsed.regleAppliquee || 'SYSCOHADA Révisé - Zone OHADA',
+              mentions: {
+                tiers: parsed.tiers,
+                date: parsed.date,
+                reference: parsed.reference,
+                montantHT: parsed.montantHT,
+                montantTVA: parsed.montantTVA,
+                montantTTC: parsed.montantTTC,
+              },
+              status: 'en_attente',
+            };
+
+            // Run 7-check validation pipeline
+            validationResult = validateAccountingProposal(proposal);
+
+            // Log to audit journal LocalStorage
+            logAuditInteraction({
+              source: 'chat',
+              llm: {
+                provider: modelObj.provider,
+                modele: modelObj.name,
+              },
+              question: text,
+              ecritureProposee: proposal,
+              validation: validationResult,
+            });
+          }
+        } catch (e) {
+          console.warn('Could not parse JSON proposal from LLM response:', e);
+        }
+      }
 
       const responseTime = new Date();
       const responseTimeStr = `${String(responseTime.getHours()).padStart(2, '0')}:${String(
@@ -271,9 +356,11 @@ export default function App() {
       const aiMsg: ChatMessage = {
         id: `msg-ai-${Date.now()}`,
         sender: 'agent',
-        senderName: 'Compta Flow Assistant',
+        senderName: 'DC Intelligence',
         content: aiResponseContent,
         timestamp: responseTimeStr,
+        proposal,
+        validationResult,
       };
 
       setChatSessions((prev) =>
@@ -507,8 +594,9 @@ export default function App() {
 
   return (
     <div
-      id="compta-flow-app-root"
-      className="flex h-screen w-screen bg-white text-[#1E293B] overflow-hidden font-['Montserrat'] antialiased"
+      id="dc-intelligence-app-root"
+      className="flex h-screen w-screen bg-white text-[#09090B] overflow-hidden font-['Inter'] antialiased"
+      style={{ fontFamily: "'Inter', -apple-system, sans-serif" }}
     >
       {/* 1. Colonne gauche : Le menu principal (Sidebar) */}
       <Sidebar
@@ -582,6 +670,9 @@ export default function App() {
             onUploadDocument={handleUploadDocument}
           />
         )}
+
+        {/* VIEW 5: JOURNAL D'AUDIT COMPTABLE */}
+        {currentTab === 'audit' && <AuditLogView />}
 
         {/* VIEW 5: PARAMÈTRES (Fournisseurs & Clés API, Modèles LLM, sans règles d'escalade ni multi-conversations clients) */}
         {currentTab === 'settings' && (
