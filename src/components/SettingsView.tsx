@@ -23,6 +23,8 @@ interface SettingsViewProps {
   onSaveApiKey: (provider: LLMProvider, newKey: string) => void;
   activeSection?: 'api-keys' | 'models';
   models: LLMModel[];
+  selectedModelId?: string;
+  onSelectModel?: (modelId: string) => void;
   onOpenAddModelModal: () => void;
   onRefreshOpenRouter: () => Promise<void>;
   isRefreshingModels?: boolean;
@@ -34,6 +36,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   onSaveApiKey,
   activeSection = 'api-keys',
   models,
+  selectedModelId,
+  onSelectModel,
   onOpenAddModelModal,
   onRefreshOpenRouter,
   isRefreshingModels = false,
@@ -346,78 +350,115 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               </div>
             </div>
 
-            {/* Models Table */}
-            <div style={{ border: '1px solid #E5E5E7', borderRadius: '12px', overflow: 'hidden', background: '#fff' }}>
-              <table className="w-full text-left" style={{ fontSize: '12px' }}>
-                <thead style={{ background: '#FAFAFA', borderBottom: '1px solid #E5E5E7' }}>
-                  <tr>
-                    <th className="px-4 py-3" style={{ color: '#71717A', fontWeight: 500, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Modèle</th>
-                    <th className="px-4 py-3" style={{ color: '#71717A', fontWeight: 500, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>ID</th>
-                    <th className="px-4 py-3" style={{ color: '#71717A', fontWeight: 500, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Fournisseur</th>
-                    <th className="px-4 py-3" style={{ color: '#71717A', fontWeight: 500, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Capacités</th>
-                    <th className="px-4 py-3" style={{ color: '#71717A', fontWeight: 500, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {models.map((m, i) => (
-                    <tr
-                      key={m.id}
-                      style={{ borderTop: i === 0 ? 'none' : '1px solid #F4F4F5' }}
-                      onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = '#FAFAFA'; }}
-                      onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
-                    >
-                      <td className="px-4 py-3">
-                        <div className="flex items-center gap-1.5" style={{ fontWeight: 600, fontSize: '13px', color: '#09090B' }}>
-                          <span>{m.name}</span>
-                          {m.isCustom && (
-                            <span style={{ fontSize: '10px', background: '#F4F4F5', color: '#52525B', padding: '1px 6px', borderRadius: '4px', fontFamily: 'monospace', border: '1px solid #E5E5E7' }}>
-                              Custom
-                            </span>
-                          )}
-                        </div>
-                        <div style={{ fontSize: '11px', color: '#71717A' }} className="line-clamp-1">{m.description}</div>
-                      </td>
-
-                      <td className="px-4 py-3" style={{ fontFamily: 'monospace', fontSize: '11px', color: '#A1A1AA' }}>
-                        {m.id}
-                      </td>
-
-                      <td className="px-4 py-3" style={{ fontWeight: 500, fontSize: '12px', color: '#52525B', textTransform: 'capitalize' }}>
-                        {m.provider}
-                      </td>
-
-                      <td className="px-4 py-3">
-                        {m.supportsReasoning ? (
-                          <span className="inline-flex items-center gap-1" style={{ fontSize: '11px', fontWeight: 500, background: '#F4F4F5', border: '1px solid #E5E5E7', borderRadius: '99px', padding: '2px 8px', color: '#52525B' }}>
-                            <Sparkles style={{ width: 11, height: 11, strokeWidth: 1.75 }} />
-                            <span>Raisonnement</span>
-                          </span>
-                        ) : (
-                          <span style={{ fontSize: '11px', color: '#A1A1AA' }}>Standard</span>
-                        )}
-                      </td>
-
-                      <td className="px-4 py-3">
-                        {m.isCustom && onDeleteCustomModel ? (
-                          <button
-                            type="button"
-                            onClick={() => onDeleteCustomModel(m.id)}
-                            title="Supprimer ce modèle"
-                            style={{ padding: '4px', borderRadius: '6px', color: '#71717A', background: 'none', border: 'none', cursor: 'pointer' }}
-                            onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.color = '#09090B'; (e.currentTarget as HTMLElement).style.background = '#F4F4F5'; }}
-                            onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.color = '#71717A'; (e.currentTarget as HTMLElement).style.background = 'none'; }}
-                          >
-                            <Trash2 style={{ width: 13, height: 13 }} />
-                          </button>
-                        ) : (
-                          <span style={{ fontSize: '11px', color: '#A1A1AA', fontFamily: 'monospace' }}>Système</span>
-                        )}
-                      </td>
+            {/* Models Table or Empty State */}
+            {models.length === 0 ? (
+              <div className="p-8 rounded-2xl border border-[#E2E8F0] bg-[#F8FAFC] text-center space-y-3">
+                <div className="w-12 h-12 rounded-2xl bg-[#09090B] text-white flex items-center justify-center mx-auto shadow-sm">
+                  <Cpu className="w-6 h-6" />
+                </div>
+                <div>
+                  <h4 className="font-bold text-[15px] text-[#1E293B]">
+                    Aucune clé API enregistrée pour le catalogue dynamique
+                  </h4>
+                  <p className="text-[12px] text-[#64748B] max-w-md mx-auto mt-1 leading-relaxed">
+                    Pour afficher la liste dynamique des modèles disponibles sur OpenRouter ou un autre fournisseur, veuillez ajouter et enregistrer votre clé API dans l'onglet <strong>"Clés API"</strong>.
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <div style={{ border: '1px solid #E5E5E7', borderRadius: '12px', overflow: 'hidden', background: '#fff' }}>
+                <table className="w-full text-left" style={{ fontSize: '12px' }}>
+                  <thead style={{ background: '#FAFAFA', borderBottom: '1px solid #E5E5E7' }}>
+                    <tr>
+                      <th className="px-4 py-3" style={{ color: '#71717A', fontWeight: 500, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Modèle</th>
+                      <th className="px-4 py-3" style={{ color: '#71717A', fontWeight: 500, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>ID</th>
+                      <th className="px-4 py-3" style={{ color: '#71717A', fontWeight: 500, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Fournisseur</th>
+                      <th className="px-4 py-3" style={{ color: '#71717A', fontWeight: 500, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Statut / Actif</th>
+                      <th className="px-4 py-3" style={{ color: '#71717A', fontWeight: 500, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Actions</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody>
+                    {models.map((m, i) => {
+                      const isSelected = selectedModelId === m.id;
+
+                      return (
+                        <tr
+                          key={m.id}
+                          style={{ borderTop: i === 0 ? 'none' : '1px solid #F4F4F5' }}
+                          className={isSelected ? 'bg-zinc-50/80' : ''}
+                          onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = '#FAFAFA'; }}
+                          onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = isSelected ? '#FAF9F6' : 'transparent'; }}
+                        >
+                          <td className="px-4 py-3">
+                            <div className="flex items-center gap-2">
+                              <span className="font-bold text-[13px] text-[#09090B]">{m.name}</span>
+                              {isSelected && (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-[#09090B] text-white shadow-xs">
+                                  <Check className="w-3 h-3 text-emerald-400" />
+                                  <span>Sélectionné</span>
+                                </span>
+                              )}
+                              {m.isCustom && (
+                                <span style={{ fontSize: '10px', background: '#F4F4F5', color: '#52525B', padding: '1px 6px', borderRadius: '4px', fontFamily: 'monospace', border: '1px solid #E5E5E7' }}>
+                                  Custom
+                                </span>
+                              )}
+                            </div>
+                            <div style={{ fontSize: '11px', color: '#71717A' }} className="line-clamp-1">{m.description}</div>
+                          </td>
+
+                          <td className="px-4 py-3" style={{ fontFamily: 'monospace', fontSize: '11px', color: '#A1A1AA' }}>
+                            {m.id}
+                          </td>
+
+                          <td className="px-4 py-3" style={{ fontWeight: 500, fontSize: '12px', color: '#52525B', textTransform: 'capitalize' }}>
+                            {m.provider}
+                          </td>
+
+                          <td className="px-4 py-3">
+                            {isSelected ? (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-100 text-emerald-800 border border-emerald-200">
+                                <span className="w-1.5 h-1.5 rounded-full bg-emerald-600" />
+                                <span>Actif en session</span>
+                              </span>
+                            ) : (
+                              <span style={{ fontSize: '11px', color: '#A1A1AA' }}>Disponible</span>
+                            )}
+                          </td>
+
+                          <td className="px-4 py-3">
+                            <div className="flex items-center gap-2">
+                              {!isSelected && onSelectModel && (
+                                <button
+                                  type="button"
+                                  onClick={() => onSelectModel(m.id)}
+                                  className="px-2.5 py-1 rounded-md border border-[#E2E8F0] hover:border-black text-[11px] font-semibold text-[#1E293B] hover:bg-black hover:text-white transition-all cursor-pointer"
+                                >
+                                  Activer
+                                </button>
+                              )}
+
+                              {m.isCustom && onDeleteCustomModel && (
+                                <button
+                                  type="button"
+                                  onClick={() => onDeleteCustomModel(m.id)}
+                                  title="Supprimer ce modèle"
+                                  style={{ padding: '4px', borderRadius: '6px', color: '#71717A', background: 'none', border: 'none', cursor: 'pointer' }}
+                                  onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.color = '#09090B'; (e.currentTarget as HTMLElement).style.background = '#F4F4F5'; }}
+                                  onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.color = '#71717A'; (e.currentTarget as HTMLElement).style.background = 'none'; }}
+                                >
+                                  <Trash2 style={{ width: 13, height: 13 }} />
+                                </button>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
         )}
       </div>

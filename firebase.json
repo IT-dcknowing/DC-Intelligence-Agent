@@ -16,6 +16,10 @@
         "function": "whatsappWebhook"
       },
       {
+        "source": "/api/**",
+        "function": "whatsappWebhook"
+      },
+      {
         "source": "**",
         "destination": "/index.html"
       }

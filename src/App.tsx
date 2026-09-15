@@ -580,6 +580,12 @@ export default function App() {
       return updated;
     });
     addToast('success', 'Clé API enregistrée', `Fournisseur : ${provider.toUpperCase()}`);
+
+    if (provider === 'openrouter' && newKey.trim().length > 0) {
+      setTimeout(() => {
+        handleRefreshOpenRouter();
+      }, 300);
+    }
   };
 
   const handleNavigateToApiKeys = () => {
@@ -681,6 +687,8 @@ export default function App() {
             onSaveApiKey={handleSaveApiKey}
             activeSection={settingsSubSection}
             models={models}
+            selectedModelId={selectedModelId}
+            onSelectModel={setSelectedModelId}
             onOpenAddModelModal={() => setIsAddModelModalOpen(true)}
             onRefreshOpenRouter={handleRefreshOpenRouter}
             isRefreshingModels={isRefreshingModels}

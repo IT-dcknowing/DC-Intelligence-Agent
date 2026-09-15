@@ -1,6 +1,6 @@
 {
-  "name": "Compta Flow",
-  "description": "Interface d'accueil et shell applicatif pour les agents IA de Compta Flow.",
+  "name": "DC Intelligence Agent",
+  "description": "Orchestrateur central DC-KNOWING : routage Compta Flow / Legal Flow / RECO, chat SYSCOHADA, WhatsApp, MCP.",
   "requestFramePermissions": [
     "microphone"
   ],

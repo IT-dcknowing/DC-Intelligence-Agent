@@ -1,77 +1,10 @@
 import { ApiKeyConfig, ChatMessage, LLMModel, LLMProvider, ReasoningEffort } from '../types';
 
-export const REAL_DEFAULT_MODELS: LLMModel[] = [
-  {
-    id: 'dots-studio/dots-3-note-preview:free',
-    name: 'Dots 3 Note Preview (Gratuit)',
-    provider: 'openrouter',
-    isFree: true,
-    description: 'Moteur central d’Accueil et Routeur d’intentions multimodales DC INTELLIGENCE.',
-  },
-  {
-    id: 'inclusionai/ling-3.0-flash-vl:free',
-    name: 'Ling 3.0 Flash VL (Gratuit)',
-    provider: 'openrouter',
-    isFree: true,
-    description: 'Modèle VLM de perception visuelle pour la classification de documents, photos & PDF.',
-  },
-  {
-    id: 'deepseek/deepseek-chat',
-    name: 'DeepSeek V3',
-    provider: 'openrouter',
-    isFree: false,
-    description: 'Modèle phare OpenRouter pour la finance, le calcul et le référentiel SYSCOHADA.',
-  },
-  {
-    id: 'deepseek/deepseek-r1',
-    name: 'DeepSeek R1',
-    provider: 'openrouter',
-    isFree: false,
-    description: 'Raisonnement approfondi pas-à-pas (CoT) pour audits fiscaux et équilibres bilanciels.',
-  },
-  {
-    id: 'meta-llama/llama-3.3-70b-instruct:free',
-    name: 'Llama 3.3 70B (Gratuit)',
-    provider: 'openrouter',
-    isFree: true,
-    description: 'Modèle OpenRouter 100% gratuit ultra-performant pour l’assistance courante.',
-  },
-  {
-    id: 'google/gemini-2.0-flash-exp:free',
-    name: 'Gemini 2.0 Flash (Gratuit)',
-    provider: 'openrouter',
-    isFree: true,
-    description: 'Inférence instantanée gratuite sur OpenRouter, vitesse et analyse documentaire.',
-  },
-  {
-    id: 'mistralai/mistral-small-24b-instruct-2501:free',
-    name: 'Mistral Small 24B (Gratuit)',
-    provider: 'openrouter',
-    isFree: true,
-    description: 'Modèle français haute précision gratuit sur OpenRouter.',
-  },
-  {
-    id: 'anthropic/claude-3.5-sonnet',
-    name: 'Claude 3.5 Sonnet',
-    provider: 'openrouter',
-    isFree: false,
-    description: 'Excellence rédactionnelle et compréhension fine des liasses fiscales.',
-  },
-  {
-    id: 'anthropic/claude-3.7-sonnet',
-    name: 'Claude 3.7 Sonnet',
-    provider: 'openrouter',
-    isFree: false,
-    description: 'Dernière génération Anthropic avec capacité de réflexion hybride.',
-  },
-  {
-    id: 'qwen/qwen-2.5-72b-instruct',
-    name: 'Qwen 2.5 72B',
-    provider: 'openrouter',
-    isFree: false,
-    description: 'Capacités multilingues et mathématiques de premier plan sur OpenRouter.',
-  },
-];
+/**
+ * Catalogue par défaut : Vider les modèles statiques en dur.
+ * La liste est chargée dynamiquement via l'API OpenRouter dès qu'une clé API est enregistrée.
+ */
+export const REAL_DEFAULT_MODELS: LLMModel[] = [];
 
 const CUSTOM_MODELS_STORAGE_KEY = 'compta_flow_custom_models';
 const API_KEYS_STORAGE_KEY = 'compta_flow_api_keys';
@@ -154,13 +87,16 @@ export function saveApiKeysToStorage(apiKeys: ApiKeyConfig[]): void {
  * Fetch real live models from OpenRouter public API
  */
 export async function fetchLiveOpenRouterModels(apiKey?: string): Promise<LLMModel[]> {
+  if (!apiKey || !apiKey.trim()) {
+    // Si aucune clé n'est enregistrée -> la liste reste vide (pas de mock en fallback)
+    return [];
+  }
+
   const headers: Record<string, string> = {
     'HTTP-Referer': window.location.origin,
-    'X-Title': 'Compta Flow',
+    'X-Title': 'DC Intelligence',
+    'Authorization': `Bearer ${apiKey.trim()}`,
   };
-  if (apiKey && apiKey.trim()) {
-    headers['Authorization'] = `Bearer ${apiKey.trim()}`;
-  }
 
   const res = await fetch('https://openrouter.ai/api/v1/models', {
     method: 'GET',

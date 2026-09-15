@@ -13,10 +13,25 @@ export default defineConfig(() => {
     },
     server: {
       // HMR is disabled in AI Studio via DISABLE_HMR env var.
-      // Do not modifyâfile watching is disabled to prevent flickering during agent edits.
+      // Do not modify—file watching is disabled to prevent flickering during agent edits.
       hmr: process.env.DISABLE_HMR !== 'true',
       // Disable file watching when DISABLE_HMR is true to save CPU during agent edits.
       watch: process.env.DISABLE_HMR === 'true' ? null : {},
+      proxy: {
+        // Dev local : redirige /api vers l'émulateur Functions ou le backend local.
+        // `firebase emulators:start` expose par défaut sur 5001.
+        // Si aucun backend ne tourne, le front bascule en mode direct (clé utilisateur).
+        '/api': {
+          target: process.env.DC_API_TARGET || 'http://127.0.0.1:5001/dcintelligenceio/us-central1/whatsappWebhook',
+          changeOrigin: true,
+          rewrite: (p) => p.replace(/^\/api/, ''),
+          configure: (proxy) => {
+            proxy.on('error', () => {
+              // Silence proxy errors : le front gère le fallback direct.
+            });
+          },
+        },
+      },
     },
   };
 });
