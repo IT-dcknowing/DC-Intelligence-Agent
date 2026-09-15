@@ -48,7 +48,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     {
       id: 'nav-tasks-btn',
       tab: 'tasks' as NavigationTab,
-      label: 'Moteur de Tâches',
+      label: 'Moteur & WhatsApp Logs',
       icon: Cpu,
       isActive: currentTab === 'tasks',
     },
