@@ -16,6 +16,8 @@ import {
   Send,
   Database,
   Unlink,
+  Scale,
+  Server,
 } from 'lucide-react';
 import { WorkspaceIntegration } from '../types';
 
@@ -129,11 +131,15 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
                       className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 border ${
                         item.id === 'google-sheets'
                           ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                          : item.id === 'legal-flow'
+                          ? 'bg-purple-50 text-purple-700 border-purple-200'
                           : 'bg-blue-50 text-blue-700 border-blue-200'
                       }`}
                     >
                       {item.id === 'google-sheets' ? (
                         <FileSpreadsheet className="w-5 h-5" />
+                      ) : item.id === 'legal-flow' ? (
+                        <Scale className="w-5 h-5" />
                       ) : (
                         <FileText className="w-5 h-5" />
                       )}
@@ -143,7 +149,7 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
                         {item.name}
                       </div>
                       <div className="text-[11px] text-[#64748B] truncate">
-                        Google Workspace
+                        {item.id === 'legal-flow' ? 'Protocole MCP Server' : 'Google Workspace'}
                       </div>
                     </div>
                   </div>
@@ -201,11 +207,15 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
               className={`w-11 h-11 rounded-xl flex items-center justify-center shrink-0 border ${
                 selectedIntegration.id === 'google-sheets'
                   ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                  : selectedIntegration.id === 'legal-flow'
+                  ? 'bg-purple-50 text-purple-700 border-purple-200'
                   : 'bg-blue-50 text-blue-700 border-blue-200'
               }`}
             >
               {selectedIntegration.id === 'google-sheets' ? (
                 <FileSpreadsheet className="w-6 h-6" />
+              ) : selectedIntegration.id === 'legal-flow' ? (
+                <Scale className="w-6 h-6" />
               ) : (
                 <FileText className="w-6 h-6" />
               )}

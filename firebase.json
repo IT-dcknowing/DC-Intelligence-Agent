@@ -8,9 +8,21 @@
     ],
     "rewrites": [
       {
+        "source": "/v1/whatsapp/webhook",
+        "function": "whatsappWebhook"
+      },
+      {
+        "source": "/webhook",
+        "function": "whatsappWebhook"
+      },
+      {
         "source": "**",
         "destination": "/index.html"
       }
     ]
+  },
+  "functions": {
+    "source": "functions",
+    "codebase": "default"
   }
 }

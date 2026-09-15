@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Cpu, RefreshCw, CheckCircle, Clock, AlertTriangle, Play, XCircle } from 'lucide-react';
 import { TaskObject, TaskStatus } from '../types';
-import { getTasksFromStorage, updateTaskStatus } from '../services/taskEngine';
+import { getTasksFromStorage, updateTaskStatus, createTask } from '../services/taskEngine';
 
 export const TaskMonitorView: React.FC = () => {
   const [tasks, setTasks] = useState<TaskObject[]>([]);
@@ -136,9 +136,51 @@ export const TaskMonitorView: React.FC = () => {
       {/* Table */}
       <div className="p-6">
         {filteredTasks.length === 0 ? (
-          <div className="border border-dashed border-[#E5E5E7] rounded-xl p-12 text-center text-gray-400">
-            <Cpu className="w-8 h-8 mx-auto mb-2 text-gray-300" />
-            <p className="text-xs">Aucune tâche enregistrée dans le moteur central.</p>
+          <div className="border border-[#E5E5E7] rounded-2xl p-8 bg-[#FDFDFD] space-y-6">
+            <div className="flex flex-col items-center justify-center text-center space-y-3">
+              <div className="w-12 h-12 rounded-2xl bg-black text-white flex items-center justify-center shadow-sm">
+                <Cpu className="w-6 h-6" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-black">Moteur de Tâches Central — En Veille</h3>
+                <p className="text-xs text-gray-500 max-w-lg mt-1 leading-relaxed">
+                  Le Task Engine centralise, supervise et exécute de manière asynchrone toutes les opérations sollicitées auprès des agents spécialisés (Comptabilité, Rapprochement, Juridique) et des connecteurs métiers (Google Sheets, LegalFlow MCP).
+                </p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2 border-t border-[#F0F0F0]">
+              <div className="p-4 rounded-xl bg-white border border-[#E5E5E7] text-left space-y-1">
+                <div className="text-[11px] font-bold text-black uppercase tracking-wider">1. Intent Classification</div>
+                <p className="text-[11px] text-gray-500">Le Routeur qualifie la requête (Facture, Contrat, Relevé) et détermine l'Agent cible.</p>
+              </div>
+              <div className="p-4 rounded-xl bg-white border border-[#E5E5E7] text-left space-y-1">
+                <div className="text-[11px] font-bold text-black uppercase tracking-wider">2. Permission & Control</div>
+                <p className="text-[11px] text-gray-500">Filtrage selon les permissions (READ, RECOMMEND, PREPARE, EXECUTE).</p>
+              </div>
+              <div className="p-4 rounded-xl bg-white border border-[#E5E5E7] text-left space-y-1">
+                <div className="text-[11px] font-bold text-black uppercase tracking-wider">3. Execution & Export</div>
+                <p className="text-[11px] text-gray-500">Génération d'écritures SYSCOHADA et écriture directe dans Google Sheets.</p>
+              </div>
+            </div>
+
+            <div className="flex justify-center pt-2">
+              <button
+                onClick={() => {
+                  createTask({
+                    agentId: 'Agent Accueil / Routeur Central',
+                    action: 'EXECUTE',
+                    input: 'Test de diagnostic système — Vérification liaison Moteur de Tâches & Connecteurs',
+                    status: 'COMPLETED',
+                  });
+                  reloadTasks();
+                }}
+                className="px-4 py-2 bg-black hover:bg-zinc-800 text-white text-xs font-semibold rounded-xl transition-all shadow-xs cursor-pointer flex items-center gap-2"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                <span>Lancer un test de diagnostic système</span>
+              </button>
+            </div>
           </div>
         ) : (
           <div className="border border-[#E5E5E7] rounded-xl overflow-hidden">

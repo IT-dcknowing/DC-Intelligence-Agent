@@ -5,7 +5,6 @@ export type NavigationTab =
   | 'knowledge'
   | 'settings'
   | 'conversations'
-  | 'audit'
   | 'tasks';
 
 export type ConversationStatus = 'en_cours' | 'escaladee' | 'terminee' | 'fermee';
@@ -100,15 +99,16 @@ export interface ChatSession {
 }
 
 export interface WorkspaceIntegration {
-  id: 'google-sheets' | 'google-docs';
+  id: 'google-sheets' | 'google-docs' | 'legal-flow';
   name: string;
   description: string;
-  iconType: 'sheets' | 'docs';
+  iconType: 'sheets' | 'docs' | 'legal-flow';
   status: 'connected' | 'disconnected' | 'connecting';
   accountEmail?: string;
   connectedAt?: string;
   lastSyncAt?: string;
   targetResource?: string;
+  endpointUrl?: string;
   scopes: string[];
   syncCount?: number;
   syncHistory?: { id: string; timestamp: string; action: string; status: 'success' | 'error' }[];

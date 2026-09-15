@@ -60,13 +60,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
       isActive: currentTab === 'knowledge',
     },
     {
-      id: 'nav-audit-btn',
-      tab: 'audit' as NavigationTab,
-      label: 'Journal d’Audit',
-      icon: ShieldCheck,
-      isActive: currentTab === 'audit',
-    },
-    {
       id: 'nav-connections-btn',
       tab: 'connections' as NavigationTab,
       label: 'Connexions',

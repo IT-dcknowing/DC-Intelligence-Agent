@@ -20,13 +20,12 @@ export function getAuditLogs(): AuditEntry[] {
 
 /**
  * Save audit log entries to LocalStorage
+ * NOTA: Stockage local d'écritures côté application DÉSACTIVÉ.
+ * Les écritures sont uniquement transmises directement aux connecteurs externes (Google Sheets / Sage).
  */
 export function saveAuditLogs(logs: AuditEntry[]): void {
-  try {
-    localStorage.setItem(AUDIT_LOG_STORAGE_KEY, JSON.stringify(logs));
-  } catch (e) {
-    console.warn('Could not save audit log to localStorage', e);
-  }
+  // Aucune écriture n'est conservée dans le localStorage du navigateur
+  return;
 }
 
 /**
