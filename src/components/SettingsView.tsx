@@ -15,6 +15,8 @@ import {
   ShieldCheck,
   Sparkles,
   Sliders,
+  Search,
+  X,
 } from 'lucide-react';
 import { ApiKeyConfig, LLMModel, LLMProvider } from '../types';
 
@@ -52,7 +54,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     openrouter: apiKeys.find((k) => k.provider === 'openrouter')?.key || '',
     anthropic: apiKeys.find((k) => k.provider === 'anthropic')?.key || '',
     deepseek: apiKeys.find((k) => k.provider === 'deepseek')?.key || '',
-    groq: apiKeys.find((k) => k.provider === 'groq')?.key || '',
   });
 
   useEffect(() => {
@@ -60,7 +61,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       openrouter: apiKeys.find((k) => k.provider === 'openrouter')?.key || '',
       anthropic: apiKeys.find((k) => k.provider === 'anthropic')?.key || '',
       deepseek: apiKeys.find((k) => k.provider === 'deepseek')?.key || '',
-      groq: apiKeys.find((k) => k.provider === 'groq')?.key || '',
     });
   }, [apiKeys]);
 
@@ -69,7 +69,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     openrouter: false,
     anthropic: false,
     deepseek: false,
-    groq: false,
   });
 
   const [savedFeedback, setSavedFeedback] = useState<Record<LLMProvider, boolean>>({
@@ -78,6 +77,23 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     deepseek: false,
     groq: false,
   });
+
+  // Recherche / filtre du catalogue de modèles (nom, ID, fournisseur, description)
+  const [modelSearch, setModelSearch] = useState('');
+
+  const normalizeForSearch = (s: string) =>
+    (s || '')
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '');
+
+  const filteredModels = (() => {
+    const q = normalizeForSearch(modelSearch.trim());
+    if (!q) return models;
+    return models.filter((m) =>
+      normalizeForSearch(`${m.name} ${m.id} ${m.provider} ${m.description || ''}`).includes(q)
+    );
+  })();
 
   const providerDocs: Record<LLMProvider, { url: string; label: string }> = {
     openrouter: {
@@ -94,7 +110,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     },
     groq: {
       url: 'https://console.groq.com/keys',
-      label: 'Obtenir une clé Groq Whisper →',
+      label: 'Clé automatique depuis .env backend',
     },
   };
 
@@ -195,7 +211,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
             {/* Providers Grid */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {apiKeys.map((config) => {
+              {apiKeys.filter((config) => config.provider !== 'groq').map((config) => {
                 const provider = config.provider;
                 const isSaved = savedFeedback[provider];
                 const isConfigured = Boolean(config.key && config.key.trim().length > 0);
@@ -350,6 +366,54 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               </div>
             </div>
 
+            {/* Barre de recherche du catalogue */}
+            {models.length > 0 && (
+              <div className="relative flex items-center">
+                <Search
+                  className="absolute left-3 w-4 h-4 pointer-events-none"
+                  style={{ color: '#A1A1AA' }}
+                />
+                <input
+                  type="text"
+                  value={modelSearch}
+                  onChange={(e) => setModelSearch(e.target.value)}
+                  placeholder="Rechercher un modèle… (nom, ID, fournisseur)"
+                  aria-label="Rechercher un modèle"
+                  style={{
+                    width: '100%',
+                    paddingLeft: 34,
+                    paddingRight: modelSearch ? 34 : 12,
+                    paddingTop: 8,
+                    paddingBottom: 8,
+                    fontSize: '12px',
+                    background: '#FAFAFA',
+                    border: '1px solid #E5E5E7',
+                    borderRadius: '8px',
+                    color: '#09090B',
+                    outline: 'none',
+                  }}
+                  onFocus={(e) => { (e.currentTarget as HTMLElement).style.borderColor = '#000'; (e.currentTarget as HTMLElement).style.background = '#fff'; }}
+                  onBlur={(e) => { (e.currentTarget as HTMLElement).style.borderColor = '#E5E5E7'; (e.currentTarget as HTMLElement).style.background = '#FAFAFA'; }}
+                />
+                {modelSearch && (
+                  <button
+                    type="button"
+                    onClick={() => setModelSearch('')}
+                    title="Effacer la recherche"
+                    className="absolute right-2.5 text-[#94A3B8] hover:text-[#1E293B]"
+                    style={{ background: 'none', border: 'none', cursor: 'pointer', display: 'flex' }}
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
+            )}
+            {modelSearch.trim() && models.length > 0 && (
+              <p style={{ fontSize: '11px', color: '#71717A', marginTop: '-14px' }}>
+                {filteredModels.length} / {models.length} modèle{models.length > 1 ? 's' : ''}
+              </p>
+            )}
+
             {/* Models Table or Empty State */}
             {models.length === 0 ? (
               <div className="p-8 rounded-2xl border border-[#E2E8F0] bg-[#F8FAFC] text-center space-y-3">
@@ -365,6 +429,27 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   </p>
                 </div>
               </div>
+            ) : filteredModels.length === 0 ? (
+              <div className="p-8 rounded-2xl border border-[#E2E8F0] bg-[#F8FAFC] text-center space-y-3">
+                <div className="w-12 h-12 rounded-2xl bg-white border border-[#E2E8F0] text-[#64748B] flex items-center justify-center mx-auto shadow-xs">
+                  <Search className="w-6 h-6" />
+                </div>
+                <div>
+                  <h4 className="font-bold text-[15px] text-[#1E293B]">
+                    Aucun modèle ne correspond à « {modelSearch.trim()} »
+                  </h4>
+                  <p className="text-[12px] text-[#64748B] max-w-md mx-auto mt-1 leading-relaxed">
+                    Essayez un autre nom, ID ou fournisseur — ou effacez la recherche pour revoir tout le catalogue.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setModelSearch('')}
+                    className="mt-3 px-3.5 py-1.5 rounded-xl bg-black hover:bg-zinc-800 text-white text-[12px] font-semibold transition-all cursor-pointer"
+                  >
+                    Effacer la recherche
+                  </button>
+                </div>
+              </div>
             ) : (
               <div style={{ border: '1px solid #E5E5E7', borderRadius: '12px', overflow: 'hidden', background: '#fff' }}>
                 <table className="w-full text-left" style={{ fontSize: '12px' }}>
@@ -378,7 +463,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     </tr>
                   </thead>
                   <tbody>
-                    {models.map((m, i) => {
+                    {filteredModels.map((m, i) => {
                       const isSelected = selectedModelId === m.id;
 
                       return (

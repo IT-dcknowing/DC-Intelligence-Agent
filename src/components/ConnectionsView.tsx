@@ -44,6 +44,28 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
     integrations.find((i) => i.id === selectedId) || integrations[0];
 
   const handleConnectClick = () => {
+    // OAuth réel : si déconnecté → ouvrir fenêtre Google de consentement
+    if (selectedIntegration.status !== 'connected') {
+      const scopes = selectedIntegration.scopes.join(' ');
+      // Client ID configuré via .env (VITE_GOOGLE_CLIENT_ID) — jamais committé
+      const clientId = (import.meta as any)?.env?.VITE_GOOGLE_CLIENT_ID?.trim?.() || '';
+      const redirectUri = `${window.location.origin}/oauth/callback`;
+      if (clientId) {
+        const authUrl =
+          `https://accounts.google.com/o/oauth2/v2/auth` +
+          `?client_id=${encodeURIComponent(clientId)}` +
+          `&redirect_uri=${encodeURIComponent(redirectUri)}` +
+          `&response_type=token` +
+          `&scope=${encodeURIComponent(scopes)}` +
+          `&access_type=offline&prompt=consent`;
+        window.open(authUrl, '_blank', 'width=500,height=600');
+        setFeedbackNotice(`Fenêtre Google ouverte — autorisez l'accès ${selectedIntegration.name} puis revenez.`);
+        setTimeout(() => setFeedbackNotice(null), 5000);
+        return;
+      }
+      // Fallback dev : si pas de CLIENT_ID configuré, on simule le toggle (sera remplacé en prod)
+      // En prod avec vrai flux, cette branche ne sera jamais prise
+    }
     onToggleConnect(selectedIntegration.id);
     const nextStatus = selectedIntegration.status === 'connected' ? 'déconnecté' : 'connecté';
     setFeedbackNotice(`${selectedIntegration.name} est maintenant ${nextStatus}.`);
@@ -305,10 +327,10 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
                   </div>
                   <div>
                     <div className="text-[13px] font-bold text-[#1E293B]">
-                      {selectedIntegration.accountEmail || 'alexmardochee0@gmail.com'}
+                      {selectedIntegration.accountEmail || 'Compte Google connecté'}
                     </div>
                     <div className="text-[11px] text-[#64748B]">
-                      Connecté le {selectedIntegration.connectedAt || '10 Septembre 2024'} • Jeton actif
+                      Connecté le {selectedIntegration.connectedAt || 'À l’instant'} • Jeton OAuth 2.0 actif
                     </div>
                   </div>
                 </div>

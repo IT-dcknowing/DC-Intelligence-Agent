@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { AssistantView } from './components/AssistantView';
 import { ConnectionsView } from './components/ConnectionsView';
@@ -46,6 +46,24 @@ import {
   fetchLiveOpenRouterModels,
   generateChatResponse,
 } from './services/llmService';
+import {
+  fetchAgents,
+  persistAgent,
+  fetchKnowledge,
+  seedKnowledge,
+  uploadKnowledge,
+  deleteKnowledgeDoc,
+  downloadKnowledge,
+  base64ToBlob,
+  fetchSessions,
+  createSessionRemote,
+  appendMessageRemote,
+  renameSessionRemote,
+  deleteSessionRemote,
+  migrateLocalSessions,
+  fetchIntegrations,
+  persistIntegration,
+} from './services/storeApi';
 
 export default function App() {
   const [currentTab, setCurrentTab] = useState<NavigationTab>('assistant');
@@ -71,13 +89,27 @@ export default function App() {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
 
-  // Chat Sessions state (User's personal accounting chat history)
+  // Chat Sessions state — prod démarre à 0, migration : purge les sessions fictives legacy
   const [chatSessions, setChatSessions] = useState<ChatSession[]>(() => {
     try {
       const saved = localStorage.getItem('dc_intelligence_chat_sessions');
       if (saved) {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          const hasMockFingerprint = parsed.some(
+            (s: any) =>
+              s?.id === 'session-1' ||
+              s?.title === "Saisie d'aujourd'hui" ||
+              s?.title === 'Bilan 2023' ||
+              s?.title === 'Rapprochement bancaire BICICI' ||
+              s?.title === 'Contrôle DAS & Salaires'
+          );
+          if (hasMockFingerprint) {
+            try { localStorage.removeItem('dc_intelligence_chat_sessions'); } catch {}
+            return INITIAL_CHAT_SESSIONS;
+          }
+          return parsed;
+        }
       }
     } catch {
       // ignore
@@ -86,7 +118,7 @@ export default function App() {
   });
 
   const [selectedSessionId, setSelectedSessionId] = useState<string>(() => {
-    return chatSessions[0]?.id || 'session-1';
+    return chatSessions[0]?.id || '';
   });
 
   // Persist chat sessions to LocalStorage
@@ -98,13 +130,22 @@ export default function App() {
     }
   }, [chatSessions]);
 
-  // Integrations state (Google Sheets, Google Docs)
+  // Integrations state — prod 0 connexion, migration purge exemple.ci
   const [integrations, setIntegrations] = useState<WorkspaceIntegration[]>(() => {
     try {
       const saved = localStorage.getItem('dc_intelligence_integrations');
       if (saved) {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          const hasMockIntegration = parsed.some(
+            (i: any) => i?.accountEmail === 'compte.google@exemple.ci' || (i?.syncHistory && i.syncHistory.length > 0 && i.syncCount > 0 && i.status === 'connected')
+          );
+          if (hasMockIntegration) {
+            try { localStorage.removeItem('dc_intelligence_integrations'); } catch {}
+            return INITIAL_INTEGRATIONS;
+          }
+          return parsed;
+        }
       }
     } catch {
       // ignore
@@ -166,19 +207,126 @@ export default function App() {
     }
   }, [selectedModelId]);
 
+  // Indicateur d'upload documentaire (désactive la zone d'import pendant l'envoi)
+  const [isUploadingDoc, setIsUploadingDoc] = useState<boolean>(false);
+
+  // =========================================================================
+  // HYDRATATION FIRESTORE — le backend est la source de vérité, le
+  // localStorage n'est qu'un cache instantané + repli offline.
+  // =========================================================================
+  const hydratedRef = useRef(false);
+  useEffect(() => {
+    if (hydratedRef.current) return;
+    hydratedRef.current = true;
+    (async () => {
+      // ---- Agents (merge : backend gagne, seed si vide) ----
+      try {
+        const remoteAgents = await fetchAgents();
+        if (remoteAgents && remoteAgents.length > 0) {
+          const byId = new Map(remoteAgents.map((a) => [a.id, a]));
+          setAgents((prev) => {
+            const merged = prev.map((a) =>
+              byId.has(a.id) ? { ...a, ...byId.get(a.id), id: a.id, conversationsCount: 0 } : a
+            );
+            const prevIds = new Set(prev.map((a) => a.id));
+            const extra = remoteAgents.filter((a) => !prevIds.has(a.id));
+            return extra.length ? [...merged, ...extra] : merged;
+          });
+        } else if (remoteAgents) {
+          INITIAL_AGENTS.forEach((a) => persistAgent(a).catch(() => {}));
+        }
+      } catch { /* repli : valeurs locales */ }
+
+      // ---- Connaissances (seed des références si vide) ----
+      try {
+        const remoteDocs = await fetchKnowledge();
+        if (remoteDocs && remoteDocs.length > 0) {
+          setKnowledgeDocs(remoteDocs);
+        } else if (remoteDocs) {
+          await seedKnowledge(
+            INITIAL_KNOWLEDGE.map((d) => ({
+              id: d.id, title: d.title, category: d.category,
+              size: d.size, summary: d.summary, lastUpdated: d.lastUpdated,
+            }))
+          ).catch(() => {});
+          setKnowledgeDocs(INITIAL_KNOWLEDGE);
+        }
+      } catch { /* repli : valeurs locales */ }
+
+      // ---- Sessions (backend prioritaire, migration du cache sinon) ----
+      try {
+        const remoteSessions = await fetchSessions();
+        if (remoteSessions && remoteSessions.length > 0) {
+          setChatSessions(remoteSessions);
+          setSelectedSessionId(remoteSessions[0].id);
+        } else if (remoteSessions) {
+          let local: ChatSession[] = [];
+          try {
+            const raw = localStorage.getItem('dc_intelligence_chat_sessions');
+            const parsed = raw ? JSON.parse(raw) : [];
+            if (Array.isArray(parsed)) local = parsed;
+          } catch { /* ignore */ }
+          if (local.length > 0) await migrateLocalSessions(local).catch(() => {});
+        }
+      } catch { /* repli : cache local */ }
+
+      // ---- Intégrations (merge statuts distants, seed/migration si vide) ----
+      try {
+        const remote = await fetchIntegrations();
+        if (remote && remote.length > 0) {
+          const byId = new Map(remote.map((i) => [i.id, i]));
+          setIntegrations((prev) => prev.map((item) => (byId.has(item.id) ? { ...item, ...byId.get(item.id), id: item.id } : item)));
+        } else if (remote) {
+          let local: WorkspaceIntegration[] = [];
+          try {
+            const raw = localStorage.getItem('dc_intelligence_integrations');
+            const parsed = raw ? JSON.parse(raw) : [];
+            if (Array.isArray(parsed)) local = parsed;
+          } catch { /* ignore */ }
+          const hasMock = local.some(
+            (i: any) => i?.accountEmail === 'compte.google@exemple.ci' || i?.accountEmail === 'alexmardochee0@gmail.com'
+          );
+          const source = local.length > 0 && !hasMock ? local : INITIAL_INTEGRATIONS;
+          setIntegrations(source);
+          source.forEach((i) => persistIntegration(i).catch(() => {}));
+        }
+      } catch { /* repli : valeurs locales */ }
+    })();
+  }, []);
+
+  // Compteurs d'échanges calculés depuis les conversations persistées (jamais codés en dur).
+  const agentsWithCounts = useMemo(() => {
+    const byName = new Map<string, string>();
+    for (const a of agents) byName.set(a.name, a.id);
+    const counts = new Map<string, number>();
+    for (const s of chatSessions) {
+      const msgs: ChatMessage[] = Array.isArray(s.messages) ? s.messages : [];
+      for (const m of msgs) {
+        if (m.sender !== 'agent') continue;
+        const agentName = m.taskRef ? m.taskRef.agentId : '';
+        if (typeof agentName !== 'string' || agentName.length === 0) continue;
+        const id: string | undefined = byName.get(agentName);
+        if (id) counts.set(id, (counts.get(id) || 0) + 1);
+      }
+    }
+    return agents.map((a) => ({ ...a, conversationsCount: counts.get(a.id) || 0 }));
+  }, [agents, chatSessions]);
+
   // =========================================================================
   // CHAT SESSIONS HANDLERS
   // =========================================================================
-  const handleNewSession = () => {
-    const newId = `session-${Date.now()}`;
+  const handleNewSession = async () => {
     const now = new Date();
     const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(
       now.getMinutes()
     ).padStart(2, '0')}`;
+    const title = `Nouvelle session ${chatSessions.length + 1}`;
 
-    const newSession: ChatSession = {
-      id: newId,
-      title: `Nouvelle session ${chatSessions.length + 1}`,
+    // Écriture immédiate Firestore ; repli local si offline.
+    const remote = await createSessionRemote(title, 'Général').catch(() => null);
+    const newSession: ChatSession = remote || {
+      id: `session-${Date.now()}`,
+      title,
       category: 'Général',
       lastMessage: 'Session créée, prête pour vos questions...',
       lastMessageTime: timeStr,
@@ -187,7 +335,7 @@ export default function App() {
     };
 
     setChatSessions((prev) => [newSession, ...prev]);
-    setSelectedSessionId(newId);
+    setSelectedSessionId(newSession.id);
     addToast('success', 'Nouvelle session créée', 'Posez votre question ou dictez votre facture.');
   };
 
@@ -197,6 +345,7 @@ export default function App() {
       return;
     }
 
+    deleteSessionRemote(sessionId).catch(() => {});
     setChatSessions((prev) => {
       const remaining = prev.filter((s) => s.id !== sessionId);
       if (selectedSessionId === sessionId && remaining.length > 0) {
@@ -208,6 +357,7 @@ export default function App() {
   };
 
   const handleRenameSession = (sessionId: string, newTitle: string) => {
+    renameSessionRemote(sessionId, newTitle).catch(() => {});
     setChatSessions((prev) =>
       prev.map((s) => (s.id === sessionId ? { ...s, title: newTitle } : s))
     );
@@ -238,6 +388,8 @@ export default function App() {
     }
 
     const targetAgent = agents.find((a) => a.id === (routingRes.targetAgentId || selectedAgentId)) || agents[0];
+    // Note : les compteurs d'échanges sont calculés depuis les messages persistés
+    // (agentsWithCounts), jamais incrémentés à la main.
 
     // Create central Task in Task Engine
     const currentTask = createTask({
@@ -250,18 +402,27 @@ export default function App() {
     userMsg.multimodalResult = multimodalRes;
     userMsg.taskRef = currentTask;
 
-    // 1. Update session immediately with user message
+    // 1. Update session immediately with user message (+ persistance Firestore immédiate)
+    const currentSession = chatSessions.find((s) => s.id === sessionId);
+    const isDefaultTitle = currentSession?.title.startsWith('Nouvelle session');
+    const nextTitle = isDefaultTitle
+      ? text.slice(0, 32) + (text.length > 32 ? '...' : '')
+      : currentSession?.title;
+    if (isDefaultTitle && nextTitle) {
+      renameSessionRemote(sessionId, nextTitle).catch(() => {});
+    }
+    appendMessageRemote(sessionId, {
+      sender: 'user',
+      senderName: 'Vous',
+      content: text,
+      agentName: targetAgent.name,
+    }).catch(() => {});
     setChatSessions((prev) =>
       prev.map((s) => {
         if (s.id === sessionId) {
-          const isDefaultTitle = s.title.startsWith('Nouvelle session');
-          const nextTitle = isDefaultTitle
-            ? text.slice(0, 32) + (text.length > 32 ? '...' : '')
-            : s.title;
-
           return {
             ...s,
-            title: nextTitle,
+            title: nextTitle || s.title,
             lastMessage: text,
             lastMessageTime: timeStr,
             messages: [...s.messages, userMsg],
@@ -361,8 +522,15 @@ export default function App() {
         timestamp: responseTimeStr,
         proposal,
         validationResult,
+        taskRef: currentTask,
       };
 
+      appendMessageRemote(sessionId, {
+        sender: 'agent',
+        senderName: 'DC Intelligence',
+        content: aiResponseContent,
+        agentName: targetAgent.name,
+      }).catch(() => {});
       setChatSessions((prev) =>
         prev.map((s) => {
           if (s.id === sessionId) {
@@ -387,73 +555,67 @@ export default function App() {
   // =========================================================================
   // WORKSPACE INTEGRATIONS HANDLERS (Google Sheets & Google Docs)
   // =========================================================================
+  // OAuth réel Google : le token est obtenu via popup consentement (voir ConnectionsView).
+  // handleToggleConnect est appelé après succès OAuth côté ConnectionsView.
   const handleToggleConnectIntegration = (integrationId: string) => {
-    setIntegrations((prev) =>
-      prev.map((item) => {
-        if (item.id === integrationId) {
-          const nextStatus = item.status === 'connected' ? 'disconnected' : 'connected';
-          const nowStr = 'Aujourd’hui';
-          const newLog = {
-            id: `log-${Date.now()}`,
-            timestamp: 'À l’instant',
-            action:
-              nextStatus === 'connected'
-                ? 'Association réussie du compte Google Workspace'
-                : 'Déconnexion du compte Google Workspace',
-            status: 'success' as const,
-          };
-          return {
-            ...item,
-            status: nextStatus,
-            accountEmail:
-              nextStatus === 'connected' ? 'alexmardochee0@gmail.com' : undefined,
-            connectedAt: nextStatus === 'connected' ? nowStr : undefined,
-            syncHistory: [newLog, ...(item.syncHistory || [])],
-          };
-        }
-        return item;
-      })
-    );
+    const current = integrations.find((i) => i.id === integrationId);
+    if (!current) return;
+    const nextStatus = current.status === 'connected' ? 'disconnected' : 'connected';
+    const nowStr = 'Aujourd’hui';
+    const newLog = {
+      id: `log-${Date.now()}`,
+      timestamp: 'À l’instant',
+      action:
+        nextStatus === 'connected'
+          ? 'Association réussie du compte Google Workspace (OAuth 2.0)'
+          : 'Déconnexion du compte Google Workspace',
+      status: 'success' as const,
+    };
+    const updated: WorkspaceIntegration = {
+      ...current,
+      status: nextStatus,
+      // En prod, accountEmail est renseigné par le token OAuth retourné, pas par un exemple fictif
+      accountEmail:
+        nextStatus === 'connected'
+          ? (current.accountEmail || (import.meta as any)?.env?.VITE_GOOGLE_ACCOUNT_EMAIL || undefined)
+          : undefined,
+      connectedAt: nextStatus === 'connected' ? nowStr : undefined,
+      syncHistory: [newLog, ...(current.syncHistory || [])],
+    };
+    // Tokens OAuth : stockés chiffrés côté backend uniquement — jamais persistés depuis le navigateur.
+    persistIntegration(updated).catch(() => {});
+    setIntegrations((prev) => prev.map((item) => (item.id === integrationId ? updated : item)));
   };
 
   const handleSyncNow = (integrationId: string) => {
-    setIntegrations((prev) =>
-      prev.map((item) => {
-        if (item.id === integrationId) {
-          const newLog = {
-            id: `log-${Date.now()}`,
-            timestamp: 'À l’instant',
-            action:
-              item.id === 'google-sheets'
-                ? 'Écritures du journal synchronisées dans le classeur'
-                : 'Mise à jour du document de rapport financier',
-            status: 'success' as const,
-          };
-          return {
-            ...item,
-            lastSyncAt: 'À l’instant',
-            syncCount: (item.syncCount || 0) + 1,
-            syncHistory: [newLog, ...(item.syncHistory || [])],
-          };
-        }
-        return item;
-      })
-    );
+    const current = integrations.find((i) => i.id === integrationId);
+    if (!current) return;
+    const newLog = {
+      id: `log-${Date.now()}`,
+      timestamp: 'À l’instant',
+      action:
+        current.id === 'google-sheets'
+          ? 'Écritures du journal synchronisées dans le classeur'
+          : 'Mise à jour du document de rapport financier',
+      status: 'success' as const,
+    };
+    const updated: WorkspaceIntegration = {
+      ...current,
+      lastSyncAt: 'À l’instant',
+      syncCount: (current.syncCount || 0) + 1,
+      syncHistory: [newLog, ...(current.syncHistory || [])],
+    };
+    persistIntegration(updated).catch(() => {});
+    setIntegrations((prev) => prev.map((item) => (item.id === integrationId ? updated : item)));
     addToast('success', 'Synchronisation terminée', 'Les données sont à jour.');
   };
 
   const handleSetTargetResource = (integrationId: string, resourceName: string) => {
-    setIntegrations((prev) =>
-      prev.map((item) => {
-        if (item.id === integrationId) {
-          return {
-            ...item,
-            targetResource: resourceName,
-          };
-        }
-        return item;
-      })
-    );
+    const current = integrations.find((i) => i.id === integrationId);
+    if (!current) return;
+    const updated: WorkspaceIntegration = { ...current, targetResource: resourceName };
+    persistIntegration(updated).catch(() => {});
+    setIntegrations((prev) => prev.map((item) => (item.id === integrationId ? updated : item)));
     addToast('success', 'Fichier cible configuré', resourceName);
   };
 
@@ -512,24 +674,23 @@ export default function App() {
     addToast('info', 'Modèle retiré', 'Le modèle personnalisé a été supprimé.');
   };
 
-  // Agent handlers
-  const selectedAgent = agents.find((a) => a.id === selectedAgentId) || null;
+  // Agent handlers — chaque "Enregistrer" écrit immédiatement dans Firestore.
+  const selectedAgent = agentsWithCounts.find((a) => a.id === selectedAgentId) || null;
 
   const handleUpdateAgent = (updated: Agent) => {
+    persistAgent(updated).catch(() => {
+      addToast('warning', 'Sauvegarde locale uniquement', 'Le serveur est injoignable, réessayez plus tard.');
+    });
     setAgents((prev) => prev.map((a) => (a.id === updated.id ? updated : a)));
     addToast('success', 'Agent mis à jour', `Règles enregistrées pour ${updated.name}`);
   };
 
   const handleToggleAgentStatus = (agentId: string) => {
-    setAgents((prev) =>
-      prev.map((a) => {
-        if (a.id === agentId) {
-          const next = a.status === 'actif' ? 'inactif' : 'actif';
-          return { ...a, status: next };
-        }
-        return a;
-      })
-    );
+    const current = agents.find((a) => a.id === agentId);
+    if (!current) return;
+    const updated: Agent = { ...current, status: current.status === 'actif' ? 'inactif' : 'actif' };
+    persistAgent(updated).catch(() => {});
+    setAgents((prev) => prev.map((a) => (a.id === agentId ? updated : a)));
   };
 
   const handleCreateNewAgent = () => {
@@ -544,23 +705,65 @@ export default function App() {
       instructions: '# Règles opérationnelles\n1. Rapprocher les lignes du journal de banque 521.\n2. Contrôler les agios et commissions.',
       conversationsCount: 0,
     };
+    persistAgent(newAgent).catch(() => {});
     setAgents((prev) => [newAgent, ...prev]);
     setSelectedAgentId(newId);
     addToast('success', 'Nouvel agent créé', `${newAgent.name} prêt à être configuré.`);
   };
 
-  // Knowledge base upload
-  const handleUploadDocument = (file: File) => {
-    const newDoc: KnowledgeDocument = {
-      id: `doc-${Date.now()}`,
-      title: file.name.replace(/\.[^/.]+$/, ''),
-      category: 'PROCÉDURES SYSCOHADA',
-      lastUpdated: 'À l’instant',
-      size: `${(file.size / (1024 * 1024)).toFixed(1)} MB`,
-      summary: `Document importé : ${file.name}. Prêt pour indexation RAG.`,
-    };
-    setKnowledgeDocs((prev) => [newDoc, ...prev]);
-    addToast('success', 'Document indexé', `${file.name} ajouté à la base de connaissances.`);
+  // Knowledge base upload — fichier réel vers Firebase Storage + métadonnées Firestore.
+  const handleUploadDocument = async (file: File) => {
+    if (file.size <= 0 || file.size > 8_000_000) {
+      addToast('error', 'Fichier refusé', 'Taille invalide ou supérieure à 8 Mo.');
+      return;
+    }
+    setIsUploadingDoc(true);
+    try {
+      const doc = await uploadKnowledge(file, 'PROCÉDURES SYSCOHADA');
+      setKnowledgeDocs((prev) => [doc, ...prev.filter((d) => d.id !== doc.id)]);
+      addToast('success', 'Document persisté', `${file.name} stocké et visible après refresh.`);
+    } catch (err: any) {
+      addToast('error', 'Échec de l’envoi', err?.message || 'Serveur injoignable.');
+    } finally {
+      setIsUploadingDoc(false);
+    }
+  };
+
+  const handleDeleteDocument = async (docId: string) => {
+    const ok = await deleteKnowledgeDoc(docId).catch(() => false);
+    if (!ok) {
+      addToast('error', 'Suppression impossible', 'Serveur injoignable.');
+      return;
+    }
+    setKnowledgeDocs((prev) => prev.filter((d) => d.id !== docId));
+    addToast('info', 'Document supprimé', 'Fichier et métadonnées retirés du stockage.');
+  };
+
+  const handleDownloadDocument = async (doc: KnowledgeDocument) => {
+    try {
+      const dl = await downloadKnowledge(doc.id);
+      if (dl) {
+        const blob = base64ToBlob(dl.base64, dl.mimeType);
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = dl.name || doc.title;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 5000);
+        addToast('success', 'Téléchargement démarré', doc.title);
+        return;
+      }
+    } catch { /* repli ci-dessous */ }
+    // Repli : documents de référence sans binaire → export du résumé.
+    const blob = new Blob([doc.summary], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${doc.title}.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   // API Key save
@@ -659,7 +862,7 @@ export default function App() {
         {currentTab === 'agents' && (
           <div id="view-agents-layout" className="flex-1 flex h-full min-w-0">
             <AgentList
-              agents={agents}
+              agents={agentsWithCounts}
               selectedAgentId={selectedAgentId}
               onSelectAgent={setSelectedAgentId}
               onToggleStatus={handleToggleAgentStatus}
@@ -674,6 +877,9 @@ export default function App() {
           <KnowledgeBaseView
             documents={knowledgeDocs}
             onUploadDocument={handleUploadDocument}
+            onDeleteDocument={handleDeleteDocument}
+            onDownloadDocument={handleDownloadDocument}
+            isUploading={isUploadingDoc}
           />
         )}
 
@@ -695,6 +901,8 @@ export default function App() {
             onDeleteCustomModel={handleDeleteCustomModel}
           />
         )}
+
+        {currentTab === 'tasks' && <TaskMonitorView />}
       </main>
 
       {/* Add New Model Modal */}

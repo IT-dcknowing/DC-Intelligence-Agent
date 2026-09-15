@@ -37,154 +37,10 @@ export const TaskMonitorView: React.FC = () => {
   // VOLET 1 : WHATSAPP LOGS DATA & STATE
   // --------------------------------------------------------------------------
   const [isRefreshingWhatsApp, setIsRefreshingWhatsApp] = useState(false);
-  const [expandedPhone, setExpandedPhone] = useState<string | null>('22578941955'); // Default expanded as in user screenshot
+  const [expandedPhone, setExpandedPhone] = useState<string | null>(null);
 
-  const [whatsappConversations, setWhatsappConversations] = useState<WhatsAppSessionLog[]>([
-    {
-      phone: '2250700000004',
-      subject: 'sans sujet',
-      intent: 'GREETING',
-      messageCount: 4,
-      lastTimestamp: '15/09 14:02',
-      messages: [
-        {
-          sender: 'user',
-          content: 'Bonjour DC Intelligence, comment puis-je déclarer ma patente DGI en ligne ?',
-          timestamp: '15/09 14:00',
-        },
-        {
-          sender: 'agent',
-          content:
-            'Bonjour ! La patente DGI s’effectue sur le portail e-Impôts CI. Selon l’article 287 du CGI, vous devez soumettre l’état prévisionnel du chiffre d’affaires avant le 15 mars.',
-          timestamp: '15/09 14:01',
-        },
-        {
-          sender: 'user',
-          content: 'Quel est le compte SYSCOHADA pour l’imputation de la patente ?',
-          timestamp: '15/09 14:01',
-        },
-        {
-          sender: 'agent',
-          content: 'La patente commerciale doit être débitée au compte **6412 « Patentes et licences »** par le crédit du compte **4421 « État, impôts et taxes directes »**.',
-          timestamp: '15/09 14:02',
-        },
-      ],
-    },
-    {
-      phone: '22589188922',
-      subject: 'sans sujet',
-      intent: 'TVA_QUERY',
-      messageCount: 8,
-      lastTimestamp: '15/09 13:54',
-      messages: [
-        {
-          sender: 'user',
-          content: 'Facture d’achat de marchandises à 18% de TVA, quel est le taux retenu à la source DGI ?',
-          timestamp: '15/09 13:50',
-        },
-        {
-          sender: 'agent',
-          content:
-            'Selon l’article 355 du CGI Ivoirien, le taux normal de TVA est de 18%. En cas d’immatriculation au régime réel simplifié, la précompte TVA retenue à la source est de 5%.',
-          timestamp: '15/09 13:54',
-        },
-      ],
-    },
-    {
-      phone: '22578941955',
-      subject: 'sans sujet',
-      intent: 'RATE',
-      messageCount: 8,
-      lastTimestamp: '14/09 10:00',
-      messages: [
-        {
-          sender: 'agent',
-          content:
-            'déclaratives et des contrôles pour : * Les déclarations de TVA (Article 340 du CGI). * Les déclarations d’ITS et retenues à la source (Article 115 du CGI). * Les déclarations de cotisations CNPS (Articles 24 à 28 du Code de Prévoyance Sociale). * Les contrôles fiscaux généraux et les sanctions asso',
-          timestamp: '14/09 09:55',
-        },
-        {
-          sender: 'user',
-          content: 'quelles sont tes ressources et sources d’information',
-          timestamp: '14/09 09:56',
-        },
-        {
-          sender: 'agent',
-          content:
-            'Mes ressources et sources d’information sont strictement limitées à la base de données que vous m’avez fournie. Je ne peux pas accéder à internet, à des bases de données externes ou à des textes de loi en dehors des extraits que vous m’avez communiqués. Pour les questions que vous posez, ma réponse se base exclusivement sur les documents suivants que vous avez partagés : * **Livre des Procédures Fiscales (LPF)** * **Code Général des Impôts (CGI)**, notamment les articles sur la TVA, l’IT',
-          timestamp: '14/09 09:58',
-        },
-        {
-          sender: 'user',
-          content: 'combien de temps pour repondre à une demande d’explication ?',
-          timestamp: '14/09 09:59',
-        },
-        {
-          sender: 'agent',
-          content:
-            'Je ne trouve pas d’information dans les textes et extraits fournis concernant le délai légal pour répondre à une demande d’explication de l’administration fiscale. Les documents fournis traitent principalement des obligations de déclaration, des taux d’imposition et des sanctions pour retard, mais ne précisent pas le délai de réponse à une demande d’explication. Pour obtenir cette information précise, il est recommandé de consulter le texte intégral du **Livre des Procédures Fiscales (LPF)**',
-          timestamp: '14/09 10:00',
-        },
-      ],
-    },
-    {
-      phone: '2250711223344',
-      subject: 'sans sujet',
-      intent: 'BANK_RECO',
-      messageCount: 6,
-      lastTimestamp: '14/09 08:30',
-      messages: [
-        {
-          sender: 'user',
-          content: 'Voici mon relevé bancaire Ecobank du mois pour pointer les virements.',
-          timestamp: '14/09 08:25',
-        },
-        {
-          sender: 'agent',
-          content: 'Relevé récepteur analysé. 2 opérations de 450 000 FCFA concordent avec les factures FC-2026-088.',
-          timestamp: '14/09 08:30',
-        },
-      ],
-    },
-    {
-      phone: '2250566778899',
-      subject: 'sans sujet',
-      intent: 'SYSCOHADA',
-      messageCount: 5,
-      lastTimestamp: '13/09 16:15',
-      messages: [
-        {
-          sender: 'user',
-          content: 'Dans quel compte imputer l’achat d’un ordinateur de 650 000 FCFA ?',
-          timestamp: '13/09 16:10',
-        },
-        {
-          sender: 'agent',
-          content: 'Le montant dépassant 50 000 FCFA, il s’agit d’une immobilisation au compte **2441 « Matériel informatique »**.',
-          timestamp: '13/09 16:15',
-        },
-      ],
-    },
-    {
-      phone: '2250102030405',
-      subject: 'sans sujet',
-      intent: 'GREETING',
-      messageCount: 2,
-      lastTimestamp: '12/09 11:20',
-      messages: [
-        {
-          sender: 'user',
-          content: 'Bonjour l’équipe DC Intelligence !',
-          timestamp: '12/09 11:19',
-        },
-        {
-          sender: 'agent',
-          content: 'Bonjour ! Je suis votre assistant central comptable & juridique. Comment puis-je vous aider aujourd’hui ?',
-          timestamp: '12/09 11:20',
-        },
-      ],
-    },
-  ]);
+  // Prod : démarre à 0, se peuple uniquement avec de vraies conversations WhatsApp
+  const [whatsappConversations, setWhatsappConversations] = useState<WhatsAppSessionLog[]>([]);
 
   const handleRefreshWhatsApp = () => {
     setIsRefreshingWhatsApp(true);
@@ -342,28 +198,28 @@ export const TaskMonitorView: React.FC = () => {
               <div className="text-[10px] font-bold text-[#64748B] uppercase tracking-wider">
                 ACTIVES 24 H
               </div>
-              <div className="text-2xl font-bold text-[#1E293B] mt-1">2</div>
+              <div className="text-2xl font-bold text-[#1E293B] mt-1">0</div>
             </div>
 
             <div className="bg-white p-4 rounded-xl border border-[#E2E8F0] shadow-xs">
               <div className="text-[10px] font-bold text-[#64748B] uppercase tracking-wider">
                 DISTRIBUÉS
               </div>
-              <div className="text-2xl font-bold text-[#1E293B] mt-1">6</div>
+              <div className="text-2xl font-bold text-[#1E293B] mt-1">0</div>
             </div>
 
             <div className="bg-white p-4 rounded-xl border border-[#E2E8F0] shadow-xs">
               <div className="text-[10px] font-bold text-[#64748B] uppercase tracking-wider">
                 LUS
               </div>
-              <div className="text-2xl font-bold text-[#1E293B] mt-1">2</div>
+              <div className="text-2xl font-bold text-[#1E293B] mt-1">0</div>
             </div>
 
             <div className="bg-white p-4 rounded-xl border border-[#E2E8F0] shadow-xs">
               <div className="text-[10px] font-bold text-[#64748B] uppercase tracking-wider text-amber-700">
                 ÉCHECS
               </div>
-              <div className="text-2xl font-bold text-[#1E293B] mt-1">4</div>
+              <div className="text-2xl font-bold text-[#1E293B] mt-1">0</div>
             </div>
 
             <div className="bg-white p-4 rounded-xl border border-[#E2E8F0] shadow-xs">

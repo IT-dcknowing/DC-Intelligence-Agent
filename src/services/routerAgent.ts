@@ -2,7 +2,7 @@ import { MultimodalResult, RouterClassification } from '../types';
 
 /**
  * SERVICE AGENT ACCUEIL / ROUTEUR CENTRAL (DC INTELLIGENCE)
- * Modèle LLM Dédié : dots-studio/dots-3-note-preview:free
+ * Modèle LLM Dédié : nex-agi/nex-n2.5-mini:free (agentique, accueil & routage)
  * Traite les entrées utilisateurs, identifie l'intention, qualifie le besoin (Qui, Quoi, Quel agent/outil)
  * et oriente la session vers l'agent spécialisé approprié sans résoudre soi-même les calculs complexes.
  */

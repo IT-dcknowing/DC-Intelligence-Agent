@@ -111,11 +111,15 @@ export function verifierEquilibre(
 }
 
 /**
- * 5.2 Vérifier l'existence d'un compte dans le plan SYSCOHADA
+ * 5.2 Vérifier l'existence d'un compte dans le plan SYSCOHADA (STRICT).
+ * N'accepte que : match exact, ou préfixe 2-3 chiffres existant au plan,
+ * avec format numérique 2..8 chiffres. Fini le fallback "Classe 1-8" qui
+ * validait n'importe quoi.
  */
 export function verifierCompteSyscohada(compte: string): { ok: boolean; libelle?: string; classe?: number } {
   if (!compte) return { ok: false };
   const cleanCompte = compte.trim();
+  if (!/^[1-8][0-9]{1,7}$/.test(cleanCompte)) return { ok: false };
 
   // Direct match
   if (SYSCOHADA_PLAN[cleanCompte]) {
@@ -126,12 +130,12 @@ export function verifierCompteSyscohada(compte: string): { ok: boolean; libelle?
     };
   }
 
-  // Prefix match (e.g. 401100 -> 401, 601100 -> 601)
+  // Prefix match strict (e.g. 401100 -> 401, 601100 -> 601) uniquement si la racine existe.
   const root3 = cleanCompte.substring(0, 3);
   if (SYSCOHADA_PLAN[root3]) {
     return {
       ok: true,
-      libelle: SYSCOHADA_PLAN[root3].libelle,
+      libelle: `${SYSCOHADA_PLAN[root3].libelle} (sous-compte ${cleanCompte})`,
       classe: SYSCOHADA_PLAN[root3].classe,
     };
   }
@@ -140,18 +144,8 @@ export function verifierCompteSyscohada(compte: string): { ok: boolean; libelle?
   if (SYSCOHADA_PLAN[root2]) {
     return {
       ok: true,
-      libelle: SYSCOHADA_PLAN[root2].libelle,
+      libelle: `${SYSCOHADA_PLAN[root2].libelle} (sous-compte ${cleanCompte})`,
       classe: SYSCOHADA_PLAN[root2].classe,
-    };
-  }
-
-  const root1 = cleanCompte.substring(0, 1);
-  const classeNum = parseInt(root1, 10);
-  if (classeNum >= 1 && classeNum <= 8) {
-    return {
-      ok: true,
-      libelle: `Compte SYSCOHADA Classe ${classeNum}`,
-      classe: classeNum,
     };
   }
 

@@ -1,0 +1,33 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Par défaut : aucun accès client direct. Les écritures passent par /api (Admin SDK).
+    // Lecture audit/tasks via /api/audit et /api/tasks (x-admin-token).
+    match /dc_audit/{doc} {
+      allow read, write: if false;
+    }
+    match /dc_tasks/{doc} {
+      allow read, write: if false;
+    }
+    // Persistance app single-tenant : seul le backend (Admin SDK) lit/écrit.
+    // Clients web/mobile : aucun accès direct (tout passe par /api).
+    match /agents_config/{doc} {
+      allow read, write: if false;
+    }
+    match /knowledge_documents/{doc} {
+      allow read, write: if false;
+    }
+    match /conversations/{doc} {
+      allow read, write: if false;
+      match /messages/{msg} {
+        allow read, write: if false;
+      }
+    }
+    match /integrations/{doc} {
+      allow read, write: if false;
+    }
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

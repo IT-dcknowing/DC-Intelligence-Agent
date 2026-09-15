@@ -1,4 +1,5 @@
 import { ApiKeyConfig, ChatMessage, LLMModel, LLMProvider, ReasoningEffort } from '../types';
+import { apiUrl, ENV_ANTHROPIC_KEY, ENV_DEEPSEEK_KEY, ENV_GROQ_KEY, ENV_OPENROUTER_KEY } from '../config/env';
 
 /**
  * Catalogue par défaut : Vider les modèles statiques en dur.
@@ -37,15 +38,29 @@ export function saveCustomModels(models: LLMModel[]): void {
 }
 
 /**
- * Load saved API keys from LocalStorage
+ * Load saved API keys from LocalStorage, avec fallback VITE_* (dev uniquement).
+ * En prod, la voie recommandée est le proxy backend /api/chat (clé serveur).
  */
 export function loadSavedApiKeys(initialKeys: ApiKeyConfig[]): ApiKeyConfig[] {
+  const envFallback: Record<string, string> = {
+    openrouter: ENV_OPENROUTER_KEY,
+    anthropic: ENV_ANTHROPIC_KEY,
+    deepseek: ENV_DEEPSEEK_KEY,
+    groq: ENV_GROQ_KEY,
+  };
+  const withEnv = initialKeys.map((k) => {
+    const envKey = (envFallback[k.provider] || '').trim();
+    if (envKey && !k.key) {
+      return { ...k, key: envKey, isConfigured: true, lastSaved: 'via VITE_* (dev)' };
+    }
+    return k;
+  });
   try {
     const raw = localStorage.getItem(API_KEYS_STORAGE_KEY);
     if (raw) {
       const saved: Record<string, { key: string; isConfigured: boolean; lastSaved?: string }> =
         JSON.parse(raw);
-      return initialKeys.map((k) => {
+      return withEnv.map((k) => {
         const item = saved[k.provider];
         if (item && item.key) {
           return {
@@ -61,7 +76,7 @@ export function loadSavedApiKeys(initialKeys: ApiKeyConfig[]): ApiKeyConfig[] {
   } catch (e) {
     console.warn('Could not load api keys from localStorage', e);
   }
-  return initialKeys;
+  return withEnv;
 }
 
 /**
@@ -152,7 +167,20 @@ export interface GenerateChatParams {
 export async function generateChatResponse(params: GenerateChatParams): Promise<string> {
   const { model, conversationHistory, userMessage, apiKeys, reasoningEffort, agentContext } = params;
 
-  // 1. Identify which API key to use
+  // 0. Voie recommandée : proxy backend /api/chat (clé OPENROUTER côté serveur, jamais exposée).
+  // Le backend lit ton .env racine (OPENROUTER_API_KEY). Si dispo, on l'utilise en priorité.
+  try {
+    const proxied = await callBackendChat(model.id, conversationHistory, userMessage, reasoningEffort, agentContext);
+    if (proxied) return proxied;
+  } catch (e: any) {
+    // backend_not_configured / 404 en dev local -> fallback direct ci-dessous.
+    const msg = String(e?.message || '');
+    if (!/backend_not_configured|404|Failed to fetch|Load failed|NetworkError/i.test(msg)) {
+      throw e;
+    }
+  }
+
+  // 1. Fallback direct (dev / clé saisie dans Paramètres).
   const openRouterKey = apiKeys.find((k) => k.provider === 'openrouter')?.key?.trim();
   const anthropicKey = apiKeys.find((k) => k.provider === 'anthropic')?.key?.trim();
   const deepseekKey = apiKeys.find((k) => k.provider === 'deepseek')?.key?.trim();
@@ -179,12 +207,57 @@ export async function generateChatResponse(params: GenerateChatParams): Promise<
     }
 
     throw new Error(
-      `AUCUNE_CLÉ_API: Pour envoyer une requête avec ${model.name}, veuillez renseigner votre clé OpenRouter (ou la clé dédiée du fournisseur) dans Paramètres > Clés API.`
+      `AUCUNE_CLÉ_API: Backend /api/chat indisponible (OPENROUTER_API_KEY manquant côté functions) et aucune clé locale. Ajoute OPENROUTER_API_KEY dans ton .env backend puis redéploie, ou renseigne une clé dans Paramètres > Clés API.`
     );
   }
 
   // Real OpenRouter call
   return callOpenRouter(openRouterKey, model.id, conversationHistory, userMessage, reasoningEffort, agentContext);
+}
+
+/**
+ * Appel via le proxy backend sécurisé (clé serveur).
+ * Lève backend_not_configured si le backend n'a pas de clé.
+ */
+async function callBackendChat(
+  modelId: string,
+  history: ChatMessage[],
+  userMessage: string,
+  reasoningEffort: ReasoningEffort,
+  agentContext?: { name: string; role: string; instructions: string }
+): Promise<string> {
+  const systemPrompt =
+    `Tu es un assistant comptable et financier d'élite de la plateforme DC Intelligence. ` +
+    `Conformité SYSCOHADA Révisé (OHADA, Côte d'Ivoire). ` +
+    (agentContext ? `Agent: ${agentContext.name}. Rôle: ${agentContext.role}. Instructions: ${agentContext.instructions}` : '') +
+    ` Précis, rigoureux sur les comptes (401, 411, 521, 445...), concis. Réponds en français.`;
+  const messages: Array<{ role: string; content: string }> = [{ role: 'system', content: systemPrompt }];
+  for (const m of history.slice(-8)) {
+    messages.push({ role: m.sender === 'user' ? 'user' : 'assistant', content: m.content });
+  }
+  messages.push({ role: 'user', content: userMessage });
+
+  let res: Response;
+  try {
+    res = await fetch(apiUrl('/chat'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: modelId, messages, temperature: 0.3 }),
+    });
+  } catch {
+    throw new Error('backend_unreachable');
+  }
+  if (res.status === 404) throw new Error('404 backend /api/chat absent (dev sans émulateur)');
+  const data = await res.json().catch(() => ({}));
+  if (res.status === 503 && (data as any)?.error === 'backend_not_configured') {
+    throw new Error('backend_not_configured');
+  }
+  if (!res.ok) {
+    throw new Error(`backend_${res.status}: ${String((data as any)?.detail || (data as any)?.error || res.statusText).slice(0, 300)}`);
+  }
+  const reply = String((data as any)?.reply || '');
+  if (!reply) throw new Error('backend_empty_reply');
+  return reply;
 }
 
 /**

@@ -244,47 +244,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             {!isCollapsed && <span className="truncate">Paramètres</span>}
           </button>
 
-          {/* User profile */}
-          {!isCollapsed && (
-            <div
-              className="mt-1 px-2 py-2 rounded-lg flex items-center gap-2.5"
-              style={{ borderTop: '1px solid #E5E5E7', marginTop: '8px', paddingTop: '10px' }}
-            >
-              {/* Avatar */}
-              <div
-                className="w-7 h-7 rounded-full flex items-center justify-center shrink-0 font-bold"
-                style={{ background: '#18181B', color: '#fff', fontSize: '11px' }}
-              >
-                AM
-              </div>
-              <div className="min-w-0">
-                <span
-                  className="block truncate font-semibold"
-                  style={{ fontSize: '12px', color: '#09090B' }}
-                >
-                  Alex Mardochee
-                </span>
-                <span
-                  className="block truncate"
-                  style={{ fontSize: '11px', color: '#A1A1AA' }}
-                >
-                  alexmardochee0@gmail.com
-                </span>
-              </div>
-            </div>
-          )}
-
-          {isCollapsed && (
-            <div className="flex justify-center py-1">
-              <div
-                className="w-7 h-7 rounded-full flex items-center justify-center font-bold cursor-pointer"
-                style={{ background: '#18181B', color: '#fff', fontSize: '11px' }}
-                title="Alex Mardochee"
-              >
-                AM
-              </div>
-            </div>
-          )}
+          {/* ADMIN — pas de profil utilisateur fictif (plateforme d'orchestration) */}
         </div>
       </aside>
 

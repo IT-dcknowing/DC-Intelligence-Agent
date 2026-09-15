@@ -15,7 +15,7 @@ export const INITIAL_AGENTS: Agent[] = [
     goal: 'Accueillir et aiguiller avec précision les requêtes multimodales vers le bon agent spécialisé de l’écosystème DC-KNOWING.',
     role: 'Aiguilleur central & classificateur d’intentions',
     instructions: '1. Identifier l’utilisateur et la société.\n2. Qualifier l’intention et le type de document (Facture -> Compta, Avis -> Legal, Relevé -> Reco).\n3. Demander une clarification si l’intention est ambiguë.\n4. Passer le relais à l’agent spécialisé sans exécuter la logique métier complexe soi-même.',
-    conversationsCount: 320,
+    conversationsCount: 0,
   },
   {
     id: 'agent-1',
@@ -87,8 +87,8 @@ Si une écriture est proposée, réponds TOUJOURS en incluant obligatoirement un
   "regleAppliquee": "SYSCOHADA Révisé - TVA 18%"
 }
 \`\`\`
-Puis détaille l'ANALYSE, l'ÉCRITURE PROPOSÉE en tableau Markdown, la JUSTIFICATION, les CONTRÔLES et les ACTIONS.`,
-    conversationsCount: 142,
+ Puis détaille l'ANALYSE, l'ÉCRITURE PROPOSÉE en tableau Markdown, la JUSTIFICATION, les CONTRÔLES et les ACTIONS.`,
+    conversationsCount: 0,
   },
   {
     id: 'agent-2',
@@ -102,7 +102,7 @@ Puis détaille l'ANALYSE, l'ÉCRITURE PROPOSÉE en tableau Markdown, la JUSTIFIC
     goal: 'Automatiser le contrôle croisé entre les mouvements bancaires réels et les journaux de trésorerie (comptes 521).',
     role: 'Auditeur de trésorerie et assistant de conciliation bancaire.',
     instructions: '1. Comparer les flux de crédits/débits avec les écritures du journal de banque 521.\n2. Isoler les agios, commissions bancaires (compte 631) et les frais de tenue de compte.\n3. Générer un état de rapprochement bancaire clair avec le solde théorique et le solde bancaire réel.\n4. Alerter immédiatement en cas d’écart inexpliqué supérieur à 100 000 FCFA.',
-    conversationsCount: 89,
+    conversationsCount: 0,
   },
   {
     id: 'agent-3',
@@ -116,7 +116,7 @@ Puis détaille l'ANALYSE, l'ÉCRITURE PROPOSÉE en tableau Markdown, la JUSTIFIC
     goal: 'Sécuriser le respect des échéances fiscales (déclarations du 15 du mois) et la conformité au Code Général des Impôts.',
     role: 'Conseiller fiscal et assistant déclaratif PME.',
     instructions: '1. Vérifier la déductibilité de la TVA selon l’article 355 du CGI ivoirien.\n2. Calculer les acomptes d’impôt sur les bénéfices (BIC) et la Contribution des Patentes.\n3. Signaler les retenues à la source obligatoires sur prestataires non immatriculés (AIRSI 5% ou 10%).\n4. Préparer les synthèses prêtes pour télédéclaration sur e-Impôts.',
-    conversationsCount: 67,
+    conversationsCount: 0,
   },
 ];
 
@@ -196,180 +196,7 @@ export const INITIAL_API_KEYS: ApiKeyConfig[] = [
   },
 ];
 
-export const INITIAL_CHAT_SESSIONS: ChatSession[] = [
-  {
-    id: 'session-1',
-    title: "Saisie d'aujourd'hui",
-    category: 'Écritures',
-    lastMessage: "Écriture d'achat de marchandises générée avec TVA déductible 18%.",
-    lastMessageTime: '10:45',
-    createdAt: 'Aujourd’hui',
-    messages: [
-      {
-        id: 'm-s1-1',
-        sender: 'user',
-        senderName: 'Vous',
-        content: "Bonjour, j'ai une facture d'achat de fournitures de bureau d'un montant de 236 000 FCFA TTC avec TVA 18% délivrée par Librairie de France. Peux-tu me générer l'écriture comptable SYSCOHADA ?",
-        timestamp: '10:42',
-      },
-      {
-        id: 'm-s1-2',
-        sender: 'agent',
-        senderName: 'Compta Flow Assistant',
-        content: `Voici l'écriture comptable normalisée selon le plan comptable SYSCOHADA révisé :
-
-### Décomposition des montants :
-- **Montant HT** : 200 000 FCFA
-- **TVA déductible (18%)** : 36 000 FCFA
-- **Total TTC** : 236 000 FCFA
-
-### Écriture au Journal des Achats (J-ACH) :
-
-| N° Compte | Libellé de compte | Débit (FCFA) | Crédit (FCFA) |
-| :--- | :--- | :--- | :--- |
-| **6047** | Fournitures de bureau non stockables | 200 000 | - |
-| **4452** | État, TVA récupérable sur achats | 36 000 | - |
-| **4011** | Fournisseurs - Dettes en compte (Librairie de France) | - | 236 000 |
-| **Total** | **Équilibré** | **236 000** | **236 000** |
-
-*Pièce justificative à archiver : Facture N° LF-2024-889.*
-Souhaitez-vous exporter directement cette écriture vers **Google Sheets** ?`,
-        timestamp: '10:45',
-      },
-    ],
-  },
-  {
-    id: 'session-2',
-    title: 'Questions TVA',
-    category: 'Fiscalité',
-    lastMessage: 'Vérification du droit à déduction de TVA selon le CGI ivoirien.',
-    lastMessageTime: 'Hier 16:20',
-    createdAt: 'Hier',
-    messages: [
-      {
-        id: 'm-s2-1',
-        sender: 'user',
-        senderName: 'Vous',
-        content: "Nous avons payé des frais d'hébergement d'hôtel à Abidjan pour un consultant externe. La TVA de 18% sur cette facture est-elle déductible ?",
-        timestamp: 'Hier 16:15',
-      },
-      {
-        id: 'm-s2-2',
-        sender: 'agent',
-        senderName: 'Compta Flow Assistant',
-        content: `**Non, la TVA n'est pas déductible.**
-
-En application de l'**article 355 du Code Général des Impôts (CGI)** en Côte d'Ivoire :
-1. **Principe d'exclusion** : Les dépenses de logement, d'hébergement, de réceptions, de spectacles et de transport de personnes sont exclues du droit à déduction de la TVA.
-2. **Traitement comptable SYSCOHADA** :
-   - La TVA doit être incorporée au coût de la charge TTC.
-   - Débit du compte **6384** « Frais d'hôtel, restaurant et réceptions » pour le montant **TTC total**.
-   - Crédit du compte **4011** ou **521** (Banque).
-
-Cette dépense est toutefois déductible de l'assiette de l'Impôt sur les Bénéfices (BIC) sous réserve qu'elle soit engagée dans l'intérêt direct de l'entreprise.`,
-        timestamp: 'Hier 16:20',
-      },
-    ],
-  },
-  {
-    id: 'session-3',
-    title: 'Bilan 2023',
-    category: 'Clôture',
-    lastMessage: 'Synthèse des amortissements de fin d’exercice et vérification de la balance.',
-    lastMessageTime: '12 Sep',
-    createdAt: '12 Sep',
-    messages: [
-      {
-        id: 'm-s3-1',
-        sender: 'user',
-        senderName: 'Vous',
-        content: "Peux-tu me rappeler les écritures d'inventaire de fin d'exercice pour l'amortissement d'un véhicule de livraison acheté 15 000 000 FCFA amorti en linéaire sur 5 ans ?",
-        timestamp: '12 Sep 14:10',
-      },
-      {
-        id: 'm-s3-2',
-        sender: 'agent',
-        senderName: 'Compta Flow Assistant',
-        content: `### Dotation annuelle aux amortissements (Bilan 2023)
-
-- **Valeur brute d'acquisition (compte 245)** : 15 000 000 FCFA
-- **Durée** : 5 ans (Taux linéaire : 20%)
-- **Annuité d'amortissement** : \`15 000 000 × 20% = 3 000 000 FCFA\`
-
-### Écriture au Journal des Opérations Diverses (J-OD) au 31/12 :
-
-| N° Compte | Libellé du compte | Débit (FCFA) | Crédit (FCFA) |
-| :--- | :--- | :--- | :--- |
-| **6812** | Dotations aux amortissements des immobilisations corporelles | 3 000 000 | - |
-| **2845** | Amortissements du matériel de transport | - | 3 000 000 |
-
-*Impact bilan* : La valeur nette comptable (VNC) du véhicule est ramenée à 12 000 000 FCFA à la clôture de l'exercice N.`,
-        timestamp: '12 Sep 14:14',
-      },
-    ],
-  },
-  {
-    id: 'session-4',
-    title: 'Rapprochement bancaire BICICI',
-    category: 'Trésorerie',
-    lastMessage: 'Identification des agios et commissions bancaires non comptabilisés.',
-    lastMessageTime: '08 Sep',
-    createdAt: '08 Sep',
-    messages: [
-      {
-        id: 'm-s4-1',
-        sender: 'user',
-        senderName: 'Vous',
-        content: "J'ai un écart de 18 500 FCFA entre le solde du compte 521100 et le relevé reçu de la BICICI.",
-        timestamp: '08 Sep 09:30',
-      },
-      {
-        id: 'm-s4-2',
-        sender: 'agent',
-        senderName: 'Compta Flow Assistant',
-        content: `Après pointage, cet écart correspond aux **frais de tenue de compte mensuels (15 000 FCFA)** et à la **taxe sur opérations bancaires TOB 10% (1 500 FCFA) + frais de relevé (2 000 FCFA)** prélevés d'office par la banque.
-
-Voici l'écriture de régularisation pour apurer l'écart :
-- Débit **6311** « Frais sur titres et valeurs » ou **6318** « Autres frais bancaires » : 17 000 FCFA
-- Débit **4454** « TVA / TOB sur services bancaires » : 1 500 FCFA
-- Crédit **521100** « Banque BICICI » : 18 500 FCFA`,
-        timestamp: '08 Sep 09:34',
-      },
-    ],
-  },
-  {
-    id: 'session-5',
-    title: 'Contrôle DAS & Salaires',
-    category: 'Social & Fiscal',
-    lastMessage: 'Vérification du tableau récapitulatif des retenues ITS et cotisations CNPS.',
-    lastMessageTime: '03 Sep',
-    createdAt: '03 Sep',
-    messages: [
-      {
-        id: 'm-s5-1',
-        sender: 'user',
-        senderName: 'Vous',
-        content: "Quels sont les comptes SYSCOHADA pour les cotisations patronales et salariales CNPS en Côte d'Ivoire ?",
-        timestamp: '03 Sep 11:00',
-      },
-      {
-        id: 'm-s5-2',
-        sender: 'agent',
-        senderName: 'Compta Flow Assistant',
-        content: `### Nomenclature SYSCOHADA pour la paie et la CNPS :
-
-1. **Part salariale retenue sur le brut** :
-   - Crédit **4311** « Sécurité Sociale - Cotisations salariales CNPS » (Régime général de retraite : 6,3%).
-2. **Part patronale à la charge de l'employeur** :
-   - Débit **6641** « Charges sociales sur rémunérations au personnel national ».
-   - Crédit **4312** « Sécurité Sociale - Cotisations patronales CNPS » (Retraite 7,7% + Prestations familiales 5,75% + Accidents du travail 2% à 5%).
-3. **Paiement au 15 du mois suivant** :
-   - Débit **4311** et **4312**, par le crédit du compte **521** (Banque).`,
-        timestamp: '03 Sep 11:04',
-      },
-    ],
-  },
-];
+export const INITIAL_CHAT_SESSIONS: ChatSession[] = [];
 
 export const INITIAL_INTEGRATIONS: WorkspaceIntegration[] = [
   {
@@ -377,33 +204,10 @@ export const INITIAL_INTEGRATIONS: WorkspaceIntegration[] = [
     name: 'Google Sheets',
     description: 'Export direct des écritures comptables, synchronisation en temps réel du journal (achats, ventes, trésorerie) et balance générale.',
     iconType: 'sheets',
-    status: 'connected',
-    accountEmail: 'alexmardochee0@gmail.com',
-    connectedAt: '10 Septembre 2024',
-    lastSyncAt: 'Aujourd’hui à 10:45',
-    targetResource: 'Compta Flow - Journal 2024.gsheet',
+    status: 'disconnected',
     scopes: ['https://www.googleapis.com/auth/spreadsheets'],
-    syncCount: 38,
-    syncHistory: [
-      {
-        id: 'sync-1',
-        timestamp: 'Aujourd’hui 10:45',
-        action: 'Ajout de 3 lignes au Journal Achats (Facture LF-2024-889)',
-        status: 'success',
-      },
-      {
-        id: 'sync-2',
-        timestamp: 'Hier 18:12',
-        action: 'Mise à jour Balance Générale 6 colonnes',
-        status: 'success',
-      },
-      {
-        id: 'sync-3',
-        timestamp: '12 Sep 15:30',
-        action: 'Export des écritures d’inventaire Bilan 2023',
-        status: 'success',
-      },
-    ],
+    syncCount: 0,
+    syncHistory: [],
   },
   {
     id: 'google-docs',
@@ -411,7 +215,6 @@ export const INITIAL_INTEGRATIONS: WorkspaceIntegration[] = [
     description: 'Génération automatisée des rapports de gestion, lettres de mission, notes de synthèse fiscale et PV d’assemblée générale.',
     iconType: 'docs',
     status: 'disconnected',
-    targetResource: 'Rapports & Synthèses Financières Compta Flow',
     scopes: ['https://www.googleapis.com/auth/documents'],
     syncCount: 0,
     syncHistory: [],
@@ -421,22 +224,10 @@ export const INITIAL_INTEGRATIONS: WorkspaceIntegration[] = [
     name: 'LegalFlow MCP Server',
     description: 'Connecteur officiel Model Context Protocol (MCP) pour la recherche juridique, la validation d’actes et la conformité fiscale zone OHADA / UEMOA.',
     iconType: 'legal-flow',
-    status: 'connected',
-    endpointUrl: 'https://legal-flow-mcp.dc-knowing.com/mcp',
-    accountEmail: 'mcp-agent@legal-flow.dc-knowing.com',
-    connectedAt: '15 Septembre 2026',
-    lastSyncAt: 'Actif (Temps Réel)',
-    targetResource: 'LegalFlow Engine (SYSCOHADA & CGI CI)',
+    status: 'disconnected',
     scopes: ['mcp.tools', 'legal.query', 'tax.validate'],
-    syncCount: 42,
-    syncHistory: [
-      {
-        id: 'sync-lf-1',
-        timestamp: 'Aujourd’hui 11:20',
-        action: 'Vérification conformité Code Général des Impôts (Article 355 TVA)',
-        status: 'success',
-      },
-    ],
+    syncCount: 0,
+    syncHistory: [],
   },
 ];
 

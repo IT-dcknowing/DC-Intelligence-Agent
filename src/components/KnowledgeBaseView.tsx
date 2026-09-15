@@ -11,17 +11,24 @@ import {
   FileText,
   UploadCloud,
   CheckCircle2,
+  Trash2,
 } from 'lucide-react';
 import { KnowledgeDocument } from '../types';
 
 interface KnowledgeBaseViewProps {
   documents: KnowledgeDocument[];
   onUploadDocument?: (file: File) => void;
+  onDeleteDocument?: (id: string) => void;
+  onDownloadDocument?: (doc: KnowledgeDocument) => void;
+  isUploading?: boolean;
 }
 
 export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
   documents,
   onUploadDocument,
+  onDeleteDocument,
+  onDownloadDocument,
+  isUploading = false,
 }) => {
   const [selectedDocId, setSelectedDocId] = useState<string>(documents[0]?.id || '');
   const [search, setSearch] = useState('');
@@ -271,9 +278,25 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
                 <span>{isReindexing ? 'Indexation...' : 'Re-indexer'}</span>
               </button>
 
+              {onDeleteDocument && (
+                <button
+                  type="button"
+                  onClick={() => onDeleteDocument(selectedDoc.id)}
+                  title="Supprimer ce document (fichier + métadonnées)"
+                  className="px-4 py-2.5 rounded-xl border border-[#E2E8F0] hover:border-red-400 hover:text-red-600 text-[#475569] text-[13px] font-semibold flex items-center gap-2 transition-colors"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  <span>Supprimer</span>
+                </button>
+              )}
+
               <button
                 type="button"
                 onClick={() => {
+                  if (onDownloadDocument) {
+                    onDownloadDocument(selectedDoc);
+                    return;
+                  }
                   const blob = new Blob([selectedDoc.summary], { type: 'text/plain' });
                   const url = URL.createObjectURL(blob);
                   const a = document.createElement('a');
@@ -370,20 +393,22 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
             >
               <UploadCloud className="w-9 h-9 text-[#64748B] mb-2 stroke-[1.75]" />
               <p className="text-[14px] font-semibold text-[#1E293B]">
-                Importez un nouveau document de référence
+                {isUploading ? 'Envoi vers le stockage sécurisé…' : 'Importez un nouveau document de référence'}
               </p>
               <p className="text-[12px] text-[#64748B] mt-1 max-w-sm">
-                Glissez-déposez vos fichiers PDF, relevés SYSCOHADA ou barèmes fiscaux ici pour indexation automatique.
+                Glissez-déposez vos fichiers PDF, relevés SYSCOHADA ou barèmes fiscaux ici — persistés dans Firebase Storage, visibles après refresh.
               </p>
-              <label className="mt-3.5 px-4 py-2 rounded-xl text-[12px] font-semibold bg-white border border-[#E2E8F0] hover:bg-neutral-50 text-[#1E293B] cursor-pointer shadow-xs transition-colors">
-                <span>Parcourir mes fichiers</span>
+              <label className={`mt-3.5 px-4 py-2 rounded-xl text-[12px] font-semibold bg-white border border-[#E2E8F0] text-[#1E293B] shadow-xs transition-colors ${isUploading ? 'opacity-50 pointer-events-none' : 'hover:bg-neutral-50 cursor-pointer'}`}>
+                <span>{isUploading ? 'Envoi en cours…' : 'Parcourir mes fichiers'}</span>
                 <input
                   type="file"
                   className="hidden"
+                  disabled={isUploading}
                   onChange={(e) => {
                     if (e.target.files && e.target.files[0] && onUploadDocument) {
                       onUploadDocument(e.target.files[0]);
                     }
+                    e.target.value = '';
                   }}
                 />
               </label>

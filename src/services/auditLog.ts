@@ -1,4 +1,5 @@
 import { AuditEntry, PropositionEcriture, ValidationResult } from '../types';
+import { apiUrl } from '../config/env';
 
 const AUDIT_LOG_STORAGE_KEY = 'dc_intelligence_audit_log';
 
@@ -18,14 +19,19 @@ export function getAuditLogs(): AuditEntry[] {
   return [];
 }
 
+const AUDIT_LOG_MAX = 200;
+
 /**
- * Save audit log entries to LocalStorage
- * NOTA: Stockage local d'écritures côté application DÉSACTIVÉ.
- * Les écritures sont uniquement transmises directement aux connecteurs externes (Google Sheets / Sage).
+ * Save audit log entries to LocalStorage (journal local d'audit, borné).
+ * La persistence Firestore viendra en P2 ; en attendant on ne perd plus la trace.
  */
 export function saveAuditLogs(logs: AuditEntry[]): void {
-  // Aucune écriture n'est conservée dans le localStorage du navigateur
-  return;
+  try {
+    const bounded = (Array.isArray(logs) ? logs : []).slice(0, AUDIT_LOG_MAX);
+    localStorage.setItem(AUDIT_LOG_STORAGE_KEY, JSON.stringify(bounded));
+  } catch (e) {
+    console.warn('Could not save audit log to localStorage', e);
+  }
 }
 
 /**
@@ -61,6 +67,21 @@ export function logAuditInteraction(params: {
   const currentLogs = getAuditLogs();
   const updatedLogs = [newEntry, ...currentLogs];
   saveAuditLogs(updatedLogs);
+
+  // Miroir serveur (Firestore si dispo, mémoire sinon) — fire-and-forget, jamais bloquant.
+  try {
+    fetch(apiUrl('/audit'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        source: newEntry.source,
+        llm: newEntry.llm,
+        question: newEntry.question,
+        ecritureProposee: newEntry.ecritureProposee,
+        validation: newEntry.validation,
+      }),
+    }).catch(() => {});
+  } catch {}
 
   return newEntry;
 }
