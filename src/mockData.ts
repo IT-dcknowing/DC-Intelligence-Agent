@@ -158,6 +158,20 @@ export const INITIAL_KNOWLEDGE: KnowledgeDocument[] = [
 export const INITIAL_MODELS: LLMModel[] = [
   // Real OpenRouter Models
   {
+    id: 'dots-studio/dots-3-note-preview:free',
+    name: 'Dots 3 Note Preview (Gratuit)',
+    provider: 'openrouter',
+    isFree: true,
+    description: 'Moteur d’Accueil Central & Routeur d’intentions DC INTELLIGENCE.',
+  },
+  {
+    id: 'inclusionai/ling-3.0-flash-vl:free',
+    name: 'Ling 3.0 Flash VL (Gratuit)',
+    provider: 'openrouter',
+    isFree: true,
+    description: 'Moteur de Perception Multimodale VLM pour documents, photos & PDF.',
+  },
+  {
     id: 'deepseek/deepseek-chat',
     name: 'DeepSeek V3',
     provider: 'openrouter',

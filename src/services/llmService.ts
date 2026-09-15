@@ -2,6 +2,20 @@ import { ApiKeyConfig, ChatMessage, LLMModel, LLMProvider, ReasoningEffort } fro
 
 export const REAL_DEFAULT_MODELS: LLMModel[] = [
   {
+    id: 'dots-studio/dots-3-note-preview:free',
+    name: 'Dots 3 Note Preview (Gratuit)',
+    provider: 'openrouter',
+    isFree: true,
+    description: 'Moteur central d’Accueil et Routeur d’intentions multimodales DC INTELLIGENCE.',
+  },
+  {
+    id: 'inclusionai/ling-3.0-flash-vl:free',
+    name: 'Ling 3.0 Flash VL (Gratuit)',
+    provider: 'openrouter',
+    isFree: true,
+    description: 'Modèle VLM de perception visuelle pour la classification de documents, photos & PDF.',
+  },
+  {
     id: 'deepseek/deepseek-chat',
     name: 'DeepSeek V3',
     provider: 'openrouter',

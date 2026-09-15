@@ -2,8 +2,9 @@ import { MultimodalResult, RouterClassification } from '../types';
 
 /**
  * SERVICE AGENT ACCUEIL / ROUTEUR CENTRAL (DC INTELLIGENCE)
- * Traite les entrées utilisateurs, identifie le domaine et oriente la session
- * vers l'agent spécialisé approprié sans résoudre soi-même les calculs complexes.
+ * Modèle LLM Dédié : dots-studio/dots-3-note-preview:free
+ * Traite les entrées utilisateurs, identifie l'intention, qualifie le besoin (Qui, Quoi, Quel agent/outil)
+ * et oriente la session vers l'agent spécialisé approprié sans résoudre soi-même les calculs complexes.
  */
 export function routeUserRequest(
   userQuery: string,
