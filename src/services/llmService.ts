@@ -262,6 +262,31 @@ export async function generateChatResponse(params: GenerateChatParams): Promise<
   return callOpenRouter(openRouterKey, model.id, conversationHistory, userMessage, reasoningEffort, agentContext);
 }
 
+export interface AgentContextShape {
+  name: string;
+  role: string;
+  instructions: string;
+}
+
+/**
+ * Verrou d'identité frontend (refonte Agent d'Accueil §4 — crise d'identité constatée).
+ * Le contexte spécialiste est transmis comme SOURCE D'EXPERTISE, jamais comme identité :
+ * sans ce verrou, l'ancien libellé d'identité spécialiste faisait adopter au modèle
+ * l'identité du spécialiste (puis déni d'être l'Accueil). Utilisé par les 4 builders
+ * de prompts ci-dessous, sans exception.
+ */
+export function buildIdentityLockedPrompt(base: string, agentContext?: AgentContextShape): string {
+  const lock =
+    'IDENTITÉ VERROUILLÉE : tu es et tu restes l’Agent d’Accueil DC Intelligence. ' +
+    'Tu ne dis JAMAIS « je suis l’agent comptabilité/legal », ni « je ne suis pas l’agent d’accueil ».';
+  if (!agentContext) return `${base} ${lock}`;
+  return (
+    `${base} ${lock} ` +
+    `Contexte d’expertise fourni par « ${agentContext.name} » (rôle : ${agentContext.role}), ` +
+    `à utiliser comme source sans changer d’identité. Consignes métier à respecter : ${agentContext.instructions}`
+  );
+}
+
 /**
  * Appel via le proxy backend sécurisé (clé serveur).
  * Lève backend_not_configured si le backend n'a pas de clé.
@@ -273,11 +298,12 @@ async function callBackendChat(
   reasoningEffort: ReasoningEffort,
   agentContext?: { name: string; role: string; instructions: string }
 ): Promise<string> {
-  const systemPrompt =
+  const systemPrompt = buildIdentityLockedPrompt(
     `Tu es un assistant comptable et financier d'élite de la plateforme DC Intelligence. ` +
     `Conformité SYSCOHADA Révisé (OHADA, Côte d'Ivoire). ` +
-    (agentContext ? `Agent: ${agentContext.name}. Rôle: ${agentContext.role}. Instructions: ${agentContext.instructions}` : '') +
-    ` Précis, rigoureux sur les comptes (401, 411, 521, 445...), concis. Réponds en français.`;
+    `Précis, rigoureux sur les comptes (401, 411, 521, 445...), concis. Réponds en français.`,
+    agentContext
+  );
   const messages: Array<{ role: string; content: string }> = [{ role: 'system', content: systemPrompt }];
   for (const m of history.slice(-8)) {
     messages.push({ role: m.sender === 'user' ? 'user' : 'assistant', content: m.content });
@@ -318,10 +344,12 @@ async function callOpenRouter(
   reasoningEffort: ReasoningEffort,
   agentContext?: { name: string; role: string; instructions: string }
 ): Promise<string> {
-  const systemPrompt = `Tu es un assistant comptable et financier d'élite de la plateforme Compta Flow.
+  const systemPrompt = buildIdentityLockedPrompt(
+    `Tu es un assistant comptable et financier d'élite de la plateforme Compta Flow.
 Tu travailles en conformité stricte avec le système comptable SYSCOHADA Révisé (OHADA, Côte d'Ivoire et Afrique de l'Ouest/Centrale).
-${agentContext ? `Nom de l'agent: ${agentContext.name}\nRôle: ${agentContext.role}\nInstructions métier: ${agentContext.instructions}` : ''}
-Sois précis, professionnel, rigoureux sur les numéros de compte SYSCOHADA (ex: 401 Fournisseurs, 411 Clients, 521 Banque, 445 TVA), et concis. Réponds en français.`;
+Sois précis, professionnel, rigoureux sur les numéros de compte SYSCOHADA (ex: 401 Fournisseurs, 411 Clients, 521 Banque, 445 TVA), et concis. Réponds en français.`,
+    agentContext
+  );
 
   // Build messages array
   const formattedMessages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [
@@ -401,9 +429,10 @@ async function callDeepSeekDirect(
     ? 'deepseek-reasoner'
     : 'deepseek-chat';
 
-  const systemPrompt = `Tu es un assistant comptable SYSCOHADA pour Compta Flow. ${
-    agentContext ? `Rôle: ${agentContext.role}. Instructions: ${agentContext.instructions}` : ''
-  }`;
+  const systemPrompt = buildIdentityLockedPrompt(
+    'Tu es un assistant comptable SYSCOHADA pour Compta Flow.',
+    agentContext
+  );
 
   const messages: any[] = [{ role: 'system', content: systemPrompt }];
   for (const m of history.slice(-6)) {
@@ -456,9 +485,10 @@ async function callAnthropicDirect(
     anthropicModel = 'claude-3-5-sonnet-20241022';
   }
 
-  const system = `Tu es un expert comptable SYSCOHADA pour Compta Flow. ${
-    agentContext ? `Rôle: ${agentContext.role}. Instructions: ${agentContext.instructions}` : ''
-  }`;
+  const system = buildIdentityLockedPrompt(
+    'Tu es un expert comptable SYSCOHADA pour Compta Flow.',
+    agentContext
+  );
 
   const messages: any[] = [];
   for (const m of history.slice(-6)) {
