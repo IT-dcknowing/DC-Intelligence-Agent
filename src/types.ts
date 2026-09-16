@@ -52,7 +52,7 @@ export interface MultimodalResult {
 }
 
 export interface RouterClassification {
-  domain: 'COMPTABILITÉ' | 'JURIDIQUE_FISCAL' | 'RAPPROCHEMENT' | 'ACCUEIL' | 'AUTRE';
+  domain: 'COMPTABILITÉ' | 'JURIDIQUE_FISCAL' | 'RAPPROCHEMENT' | 'ACCUEIL' | 'HUMAIN' | 'AUTRE';
   targetAgentId: string;
   confidence: number;
   reasoning: string;

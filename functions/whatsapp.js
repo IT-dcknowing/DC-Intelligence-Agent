@@ -43,14 +43,18 @@ function transition(conv, next) {
   conv.history.push({ s: next, at: Date.now() });
 }
 
-// --- Persona Agent Accueil (réceptionniste) ---
+// --- Persona Agent Accueil (réceptionniste) — refonte §4 ---
 const PERSONA_SYSTEM = [
-  'Tu es DC, l’assistant d’accueil de DC Intelligence, cabinet d’expertise comptable et fiscale en Côte d’Ivoire.',
+  'Tu es DC, l’Agent d’Accueil et Routeur central de DC Intelligence, cabinet d’expertise comptable et fiscale en Côte d’Ivoire.',
+  'IDENTITÉ VERROUILLÉE : tu es et tu restes l’Agent d’Accueil du premier au dernier message. Tu ne dis JAMAIS « je suis l’agent comptabilité/legal », ni « je ne suis pas l’agent d’accueil ». Ta mission unique : accueillir, qualifier, rassurer, router. Tu ne traites JAMAIS une demande spécialisée toi-même : tu transmets le résultat des vérifications effectuées pour le client.',
+  'ANTI-HALLUCINATION : tu ne prétends JAMAIS avoir consulté un dossier ou obtenu un retour sans preuve. La liste « Actions réellement effectuées » fournie dans le contexte est la SEULE vérité ; si elle est vide, dis ce qu’il te manque au lieu d’inventer.',
+  'ÉCOUTE ET EMPATHIE : reformule la demande pour montrer que tu as compris ; si le client est frustré, reconnais l’émotion d’abord (« Je comprends que c’est frustrant »), sans répondre à l’insulte.',
+  'EFFICACITÉ : une question à la fois, jamais 10 informations d’un coup ; pas de jargon, pas de listes interminables.',
   'Ton ton : chaleureux, naturel, professionnel, légèrement conversationnel.',
   'Tu peux utiliser OCCASIONNELLEMENT une touche locale légère (« Humm », « D’accord », « Pas de souci », « Oui, je vois »).',
   'INTERDIT : caricature ivoirienne, argot forcé, familiarité excessive, plus d’un emoji par message.',
   'Réponds en français, en messages COURTS (1 à 3 phrases max). Jamais de mur de texte.',
-  'Tu ne donnes jamais de fausse information : si tu ne sais pas, tu dis que tu vérifies.',
+  'SÉCURITÉ : ne divulgue jamais d’information sensible ; en cas de sujet sensible, transmets à un humain.',
 ].join(' ');
 
 // Messages de PRÉSENCE — chacun n’est envoyé qu’au moment où l’événement correspondant a VRAIMENT lieu.
@@ -141,18 +145,47 @@ function isGreetingOnly(text) {
 }
 
 // Routeur local (miroir allégé du routerAgent front) — classification rapide avant LLM/outils.
+// Matrice refonte §6 : « Legal Flow » route vers legal (jamais « je n’ai pas accès »),
+// demande d'humain explicite vers humain.
 function routeText(text) {
   const t = (text || '').toLowerCase();
+  if (/\b(humain|humaine|conseiller|conseillère|conseillere|agent humain|vraie personne|vrai personne|personne réelle|être humain)\b/.test(t)) {
+    return { domain: 'HUMAIN', agent: 'humain', confidence: 0.9 };
+  }
   if (/\b(facture|achat|fournisseur|ttc|tva|601|401|bilan|écriture|ecriture|syscohada|compta|salaire|paie)\b/.test(t)) {
     return { domain: 'COMPTABILITÉ', agent: 'compta', confidence: 0.85 };
   }
-  if (/\b(rapprochement|relevé|releve|banque|ecobank|sgbci|bicici|pointage|solde|521|écart|ecart|virement)\b/.test(t)) {
+  if (/\b(rapprochement|relevé|releve|banque|ecobank|sgbci|bicici|pointage|solde|521|écart|ecart|virement|lettrage)\b/.test(t)) {
     return { domain: 'RAPPROCHEMENT', agent: 'reco', confidence: 0.85 };
   }
-  if (/\b(fiscal|dgi|impôt|impot|statuts|contrat|bail|courrier|das|cnps|patente|retenue|télédéclaration|déclaration|declaration|juridique|tribunal|litige|amende|redressement|avis)\b/.test(t)) {
+  if (/legal[\s_-]*flow|legalflow|\b(rccm|contentieux|conformité|conformite|fiscal|dgi|impôt|impot|statuts|contrat|bail|courrier|das|cnps|patente|retenue|télédéclaration|déclaration|declaration|juridique|tribunal|litige|amende|redressement|avis)\b/.test(t)) {
     return { domain: 'JURIDIQUE_FISCAL', agent: 'legal', confidence: 0.85 };
   }
   return { domain: 'ACCUEIL', agent: 'accueil', confidence: 0.6 };
+}
+
+// --- Détections refonte §7 (pures, testables) ---
+// Frustration/colère : on apaise dès le 1er signe, on ne répond jamais à l'insulte.
+const FRUSTRATION_RX = /(merde|putain|bordel|fait chier|con\b|connard|débile|stupide|incompétent|incompetent|nul+|nulle|marre|ras[- ]?le[- ]?bol|ça marche pas|ca marche pas|ne fonctionne pas|fonctionne pas|toujours pas|jamais.*répon|arnaque|escro|honteux|foutage|foutaise|nique)/i;
+function isFrustrated(text) {
+  return FRUSTRATION_RX.test(String(text || ''));
+}
+
+// Sujet sensible (contexte militaire) : escalade humain + alerte, jamais de traitement.
+const SENSITIVE_RX = /(secret[ -]?défense|secret defense|militaire|armée|armee|arme|munition|explosif|confidentiel|classifié|classifie|renseignement|opération secrète|operation secrete)/i;
+function isSensitive(text) {
+  return SENSITIVE_RX.test(String(text || ''));
+}
+
+// Test de présence (« tu es là ? ») : l'accueil répond qu'il est là.
+function isPresenceCheck(text) {
+  return /(tu es l[àa]|t['’ ]?es l[àa]|vous êtes l[àa]|es-tu l[àa]|êtes-vous l[àa]|y a (quelqu|kelk)|il y a quelqu|quelqu'un.*l[àa])[^?.!…]{0,20}[?.!…]*$/i.test((text || '').trim());
+}
+
+// Insistance accueil (« je veux parler à l'accueil ») : « C'est moi ».
+function isAccueilInsistence(text) {
+  const t = (text || '').toLowerCase();
+  return /\baccueil\b/.test(t) && /(parler|voir|voir|appeler|contacter|je veux|donne|passe)/.test(t);
 }
 
 // --- Client WhatsApp Cloud API ---
@@ -281,6 +314,10 @@ module.exports = {
   splitResult,
   isGreetingOnly,
   routeText,
+  isFrustrated,
+  isSensitive,
+  isPresenceCheck,
+  isAccueilInsistence,
   typingNeeded,
   createWhatsAppClient,
 };

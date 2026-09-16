@@ -43,8 +43,25 @@ export function routeUserRequest(
     }
   }
 
-  // 2. Analyse textuelle directe par mots-clés & intentions
+  // 2. Analyse textuelle directe par mots-clés & intentions (matrice refonte §6)
   const text = (userQuery || '').toLowerCase();
+
+  // Demande d'humain explicite -> escalade (jamais « je n'ai pas accès »)
+  if (
+    /\b(humain|humaine|conseiller|conseillère|conseillere|agent humain|vraie personne|vrai personne|personne réelle|être humain)\b/.test(
+      text
+    )
+  ) {
+    return {
+      domain: 'HUMAIN',
+      targetAgentId: 'agent-router',
+      confidence: 0.9,
+      reasoning: "Demande explicite d'interlocuteur humain : escalade.",
+      requiresClarification: true,
+      clarificationQuestion:
+        'Très bien, je transmets à un conseiller humain. Voulez-vous qu’il vous rappelle ?',
+    };
+  }
 
   // Domaine Comptabilité
   if (
@@ -76,9 +93,9 @@ export function routeUserRequest(
     };
   }
 
-  // Domaine Juridique & Fiscal
+  // Domaine Juridique & Fiscal (« Legal Flow » route vers legal, jamais « pas d'accès »)
   if (
-    /\b(fiscal|dgi|impôt|impot|statuts|contrat|bail|das|cnps|patente|airsi|retenue|télédéclaration|e-impots)\b/.test(
+    /legal[\s_-]*flow|legalflow|\b(rccm|contentieux|conformité|conformite|fiscal|dgi|impôt|impot|statuts|contrat|bail|das|cnps|patente|airsi|retenue|télédéclaration|e-impots)\b/.test(
       text
     )
   ) {

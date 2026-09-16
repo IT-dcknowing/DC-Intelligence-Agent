@@ -258,6 +258,22 @@ function mcpTargetFor(software) {
   return ((targets[software] || '') + '').trim();
 }
 
+// Refonte §8.4 — un agent n'est annoncé que si un VRAI outil tourne derrière.
+// Les domaines dc-knowing.com sont documentés comme inexistants (cf. MCP_INTEGRATION.md).
+function mcpTargetIsReal(software) {
+  const target = mcpTargetFor(software);
+  return Boolean(target) && !/dc-knowing\.com/i.test(target);
+}
+
+// Refonte §3.2/§8.3 — routage explicite avec contexte et traçabilité.
+// L'Agent d'Accueil ne change jamais currentAgent sans passer par ici.
+function routeToAgent(conv, wamid, agent, context) {
+  console.log(`[WA STEP] wamid=${wamid} étape=route_to_agent agent=${agent} confiance=${context.confidence} intent=${context.intent}`);
+  waUpsertConversation(context.phone, { stage: 'ROUTING', currentAgent: agent, topic: context.topic, intent: context.intent });
+  waConv.transition(conv, waConv.STATES.ROUTING);
+  return { agent, ...context };
+}
+
 // Appel JSON-RPC MCP interne (même contrat que la route). Lève en cas d'échec.
 async function mcpCallTool({ software, toolName, args }) {
   const target = mcpTargetFor(software);
@@ -458,8 +474,18 @@ async function handleInboundMessage(wa, { wamid, from, type, msg }) {
   wa = trackWaSends(wa, { phone: from, wamid });
   const textBody = type === 'text' ? String((msg.text && msg.text.body) || '').trim() : '';
   const hasMedia = ['image', 'document', 'audio', 'video', 'sticker'].includes(type);
+  // Refonte §7 — signaux prioritaires AVANT tout théâtre de présence.
+  const sensitive = !hasMedia && Boolean(textBody) && waConv.isSensitive(textBody);
+  const frustrated = !sensitive && !hasMedia && Boolean(textBody) && waConv.isFrustrated(textBody);
+  let frustrationCount = 0;
+  if (frustrated) {
+    try {
+      const prior = await waReadConversation(from);
+      frustrationCount = ((prior && prior.frustrationCount) || 0) + 1;
+    } catch { frustrationCount = 1; }
+  }
   waLogEvent({ wamid, direction: 'in', phone: from, kind: type, preview: (textBody || `[${type}]`).slice(0, 300), state: 'RECEIVED' });
-  waUpsertConversation(from, { stage: 'RECEIVED' }, { from: 'user', text: (textBody || `[${type}]`).slice(0, 500) });
+  waUpsertConversation(from, { stage: 'RECEIVED', currentAgent: 'accueil', frustrationCount }, { from: 'user', text: (textBody || `[${type}]`).slice(0, 500) });
   console.log(`[WA STEP] wamid=${wamid} étape=réception phone=${from} type=${type} len=${textBody.length}`);
   try { await withTimeout(wa.sendRead(wamid), 4000, 'read_timeout'); } catch (e) {
     console.warn('[WA] read échoué', String((e && e.message) || e).slice(0, 150));
@@ -471,7 +497,51 @@ async function handleInboundMessage(wa, { wamid, from, type, msg }) {
     waConv.transition(conv, waConv.STATES.RESPONDING);
     await wa.sendText(from, 'Bonjour ! J’espère que vous allez bien. Dites-moi : une facture, un courrier fiscal, ou un point sur votre dossier ?');
     waConv.transition(conv, waConv.STATES.COMPLETED);
-    waUpsertConversation(from, { stage: 'COMPLETED', intent: 'ACCUEIL' });
+    waUpsertConversation(from, { stage: 'COMPLETED', intent: 'ACCUEIL', currentAgent: 'accueil' });
+    return { state: conv.state };
+  }
+
+  // Refonte §7.6 — sujet sensible : jamais de traitement, escalade humain + alerte traçée.
+  if (sensitive) {
+    console.log(`[WA STEP] wamid=${wamid} étape=alerte_sensible escalade=humain`);
+    waLogEvent({ wamid, direction: 'in', phone: from, kind: type, preview: textBody.slice(0, 100), state: 'SENSITIVE_ALERT' });
+    waConv.transition(conv, waConv.STATES.RESPONDING);
+    await wa.sendText(from, 'Bien noté. Vu la sensibilité du sujet, je transmets à un conseiller humain habilité. Laissez-moi un numéro où vous joindre et on vous rappelle vite.');
+    waConv.transition(conv, waConv.STATES.ESCALATED);
+    waUpsertConversation(from, { stage: 'ESCALATED', intent: 'HUMAIN', currentAgent: 'humain' });
+    return { state: conv.state };
+  }
+
+  // Refonte §7.1 — frustration : apaiser DÈS le 1er signe, jamais de réponse à l'insulte,
+  // jamais de fausse vérification. Après 2 manifestations : proposition d'humain.
+  if (frustrated) {
+    console.log(`[WA STEP] wamid=${wamid} étape=frustration compteur=${frustrationCount}`);
+    waConv.transition(conv, waConv.STATES.RESPONDING);
+    if (frustrationCount >= 2) {
+      await wa.sendText(from, 'Je comprends que c’est frustrant, et je suis désolé. Voulez-vous que je vous mette en relation avec un conseiller humain ?');
+      waConv.transition(conv, waConv.STATES.ESCALATED);
+      waUpsertConversation(from, { stage: 'ESCALATED', intent: 'HUMAIN', currentAgent: 'humain' });
+    } else {
+      await wa.sendText(from, 'Je sens que quelque chose ne va pas. Dites-moi ce qui vous préoccupe, je suis là pour vous aider.');
+      waConv.transition(conv, waConv.STATES.COMPLETED);
+      waUpsertConversation(from, { stage: 'COMPLETED', intent: 'ACCUEIL', currentAgent: 'accueil' });
+    }
+    return { state: conv.state };
+  }
+
+  // Refonte §7.4 — insistance accueil + test de présence : l'accueil répond qu'il est là.
+  if (!hasMedia && textBody && waConv.isPresenceCheck(textBody)) {
+    waConv.transition(conv, waConv.STATES.RESPONDING);
+    await wa.sendText(from, 'Oui, je suis là. Je suis l’Agent d’Accueil DC Intelligence. Comment puis-je vous aider ?');
+    waConv.transition(conv, waConv.STATES.COMPLETED);
+    waUpsertConversation(from, { stage: 'COMPLETED', intent: 'ACCUEIL', currentAgent: 'accueil' });
+    return { state: conv.state };
+  }
+  if (!hasMedia && textBody && waConv.isAccueilInsistence(textBody)) {
+    waConv.transition(conv, waConv.STATES.RESPONDING);
+    await wa.sendText(from, 'C’est moi l’accueil, je vous écoute. Que puis-je faire pour vous ?');
+    waConv.transition(conv, waConv.STATES.COMPLETED);
+    waUpsertConversation(from, { stage: 'COMPLETED', intent: 'ACCUEIL', currentAgent: 'accueil' });
     return { state: conv.state };
   }
 
@@ -537,17 +607,44 @@ async function handleInboundMessage(wa, { wamid, from, type, msg }) {
     return { state: conv.state };
   }
 
-  // Routage.
-  waConv.transition(conv, waConv.STATES.ROUTING);
+  // Routage explicite (refonte §3.2/§6/§8.2-8.3).
   const route = waConv.routeText(`${extractedText} ${docType}`);
   if (docType === 'tax_notice' || docType === 'legal_contract') { route.domain = 'JURIDIQUE_FISCAL'; route.agent = 'legal'; }
   else if (docType === 'invoice') { route.domain = 'COMPTABILITÉ'; route.agent = 'compta'; }
   else if (docType === 'bank_statement') { route.domain = 'RAPPROCHEMENT'; route.agent = 'reco'; }
   const TOPIC_LABEL = { invoice: 'Facture / pièce', tax_notice: 'Avis fiscal', bank_statement: 'Relevé bancaire', legal_contract: 'Document juridique', general_query: 'Question' };
-  waUpsertConversation(from, { stage: 'ROUTING', topic: TOPIC_LABEL[docType] || 'Question', intent: route.domain });
-  console.log(`[WA STEP] wamid=${wamid} étape=routage domaine=${route.domain} agent=${route.agent}`);
+
+  // Demande d'humain explicite : transmission immédiate, sans détour.
+  if (route.agent === 'humain') {
+    waConv.transition(conv, waConv.STATES.RESPONDING);
+    await wa.sendText(from, 'Très bien, je transmets votre demande à un conseiller humain. Il reviendra vers vous très vite.');
+    waConv.transition(conv, waConv.STATES.ESCALATED);
+    waUpsertConversation(from, { stage: 'ESCALATED', intent: 'HUMAIN', currentAgent: 'humain' });
+    console.log(`[WA STEP] wamid=${wamid} étape=route_to_agent agent=humain (demande explicite)`);
+    return { state: conv.state };
+  }
+
+  routeToAgent(conv, wamid, route.agent, {
+    phone: from,
+    topic: TOPIC_LABEL[docType] || 'Question',
+    intent: route.domain,
+    confidence: route.confidence,
+  });
+
+  // Seuil de confiance 0,75 (refonte §8.2) : en dessous, on clarifie au lieu de deviner.
+  // Une seule question, jamais un interrogatoire (refonte §7.2).
+  if (!hasMedia && confidence < 0.75 && route.agent === 'accueil') {
+    waConv.transition(conv, waConv.STATES.WAITING_USER);
+    await wa.sendText(from, 'Pas de souci, je vais vous aider. Pour bien vous orienter : s’agit-il d’une facture ou d’une question comptable, d’un sujet fiscal ou juridique, ou d’un relevé bancaire ?');
+    waConv.transition(conv, waConv.STATES.COMPLETED);
+    waUpsertConversation(from, { stage: 'WAITING_USER', intent: 'CLARIFICATION', currentAgent: 'accueil' });
+    return { state: conv.state };
+  }
 
   await refreshTypingIfSlow();
+
+  // Refonte §8.4 — registre des actions VRAIMENT effectuées, injecté au LLM.
+  const actionsReelles = ['classification (' + docType + ')'];
 
   // Identité RÉELLE via Legal Flow (phone → entreprise, sans devinette).
   let companyId = null;
@@ -566,16 +663,19 @@ async function handleInboundMessage(wa, { wamid, from, type, msg }) {
     }
     companyId = (companies[0] && (companies[0].id || companies[0].entreprise_id)) || ctx.entreprise_id || null;
     companyLabel = (companies[0] && (companies[0].nom || companies[0].name)) || '';
+    if (companyId) actionsReelles.push('identification entreprise (Legal Flow)');
   } catch (e) {
     console.warn('[WA] identité indisponible, suite en mode générique', String((e && e.message) || e).slice(0, 150));
   }
   console.log(`[WA STEP] wamid=${wamid} étape=identité entreprise=${companyLabel || 'non_identifiée'}`);
 
-  // PRÉSENCE 2 — RÉEL : on lance VRAIMENT l'agent / les outils maintenant.
+  // PRÉSENCE 2 — RÉEL : on annonce un agent SEULEMENT si un VRAI outil tourne derrière.
+  // Sans outil (compta/reco sans MCP réel, legal sans entreprise) : aucune annonce
+  // d'agent, la réponse suit directement (refonte §8.4 — jamais de fausse activité).
   waConv.transition(conv, waConv.STATES.AGENT_WORKING);
-  if (route.agent === 'legal') await say(waConv.PRESENCE.routingLegal);
-  else if (route.agent === 'compta') await say(waConv.PRESENCE.routingCompta);
-  else if (route.agent === 'reco') await say(waConv.PRESENCE.routingReco);
+  if (route.agent === 'legal' && companyId) await say(waConv.PRESENCE.routingLegal);
+  else if (route.agent === 'compta' && mcpTargetIsReal('Compta Flow')) await say(waConv.PRESENCE.routingCompta);
+  else if (route.agent === 'reco' && mcpTargetIsReal('RECO')) await say(waConv.PRESENCE.routingReco);
   await refreshTypingIfSlow();
 
   // Travail agent : outils métier RÉELS (lecture seule).
@@ -588,6 +688,7 @@ async function handleInboundMessage(wa, { wamid, from, type, msg }) {
         withTimeout(mcpCallTool({ software: 'Legal Flow', toolName: 'get_overdue_obligations', args: { entreprise_id: companyId } }), 15000, 'tool_timeout'),
       ]);
       toolContext += `\n[Compliance] ${statusRaw.slice(0, 2500)}\n[Retards] ${obligRaw.slice(0, 2500)}`;
+      actionsReelles.push('conformité (Legal Flow)', 'obligations en retard (Legal Flow)');
       const needSearch = /dgi|courrier|article|tva|déclaration|declaration|loi|amende/i.test(extractedText);
       if (needSearch) {
         await say(waConv.PRESENCE.verifying); // RÉEL : une 2e vague d'outils part maintenant
@@ -596,6 +697,7 @@ async function handleInboundMessage(wa, { wamid, from, type, msg }) {
           15000, 'tool_timeout'
         );
         toolContext += `\n[RAG juridique] ${searchRaw.slice(0, 3000)}`;
+        actionsReelles.push('recherche documentaire juridique');
       }
     } catch (e) {
       console.warn('[WA] outils legal partiels', String((e && e.message) || e).slice(0, 150));
@@ -637,7 +739,7 @@ async function handleInboundMessage(wa, { wamid, from, type, msg }) {
     ? ' Correction du client : annule et remplace sa demande précédente, reprends l’historique ci-dessus.'
     : '';
   const composeMessages = [
-    { role: 'system', content: `${waConv.PERSONA_SYSTEM} Contexte dossier : entreprise=${companyLabel || 'non identifiée'}, domaine=${route.domain}. ${dossierContext || 'Premier contact.'}${correctionNote} Données outils : ${toolContext.slice(0, 4000) || 'aucune'}. Si les données sont insuffisantes, dis ce qu’il te manque au lieu d’inventer.` },
+    { role: 'system', content: `${waConv.PERSONA_SYSTEM} Contexte dossier : entreprise=${companyLabel || 'non identifiée'}, domaine=${route.domain}. ${dossierContext || 'Premier contact.'}${correctionNote} Actions réellement effectuées : ${actionsReelles.join(' → ') || 'AUCUNE — ne prétends à aucune vérification'}. Données outils : ${toolContext.slice(0, 4000) || 'aucune'}. Tu restes l’Agent d’Accueil : transmets le résultat, sans changer de rôle. Si les données sont insuffisantes, dis ce qu’il te manque au lieu d’inventer.` },
     { role: 'user', content: `${isCorrection ? 'CORRECTION (remplace ma demande précédente) — ' : ''}Message client (${docType}, confiance ${confidence}) : ${extractedText.slice(0, 2500)}${entities && entities.amount ? ` [montant détecté : ${entities.amount}]` : ''}` },
   ];
   // Fallback d'attente : si la composition dépasse 10 s, on prévient le client
@@ -678,9 +780,11 @@ async function handleInboundMessage(wa, { wamid, from, type, msg }) {
     return { state: conv.state };
   }
 
-  // PRÉSENCE 3 — RÉEL : le résultat est prêt, on l’envoie découpé.
+  // PRÉSENCE 3 — RÉEL : « j'ai son retour » SEULEMENT si un outil a VRAIMENT répondu.
+  // Sans outil (réponse composée directement) : on envoie le résultat sans prétendre
+  // à une vérification inexistante — c'est exactement le bug « Merde » de la refonte §1.
   waConv.transition(conv, waConv.STATES.RESULT_READY);
-  await say(waConv.PRESENCE.resultReady);
+  if (toolContext.trim()) await say(waConv.PRESENCE.resultReady);
   waConv.transition(conv, waConv.STATES.RESPONDING);
   const chunks = waConv.splitResult(answer);
   console.log(`[WA STEP] wamid=${wamid} étape=envoi chunks=${chunks.length}`);
@@ -1247,9 +1351,14 @@ async function waUpsertConversationInner(phone, patch = {}, lastMsg = null) {
     topic: str(patch.topic, 80),
     intent: str(patch.intent, 40),
     stage: str(patch.stage, 30),
+    currentAgent: str(patch.currentAgent, 40),
     updatedAt: now,
   };
   Object.keys(cleanPatch).forEach((k) => { if (!cleanPatch[k]) delete cleanPatch[k]; });
+  // Compteur de frustration : 0 est une valeur légitime (reset), on le garde explicitement.
+  if (Number.isInteger(patch.frustrationCount) && patch.frustrationCount >= 0) {
+    cleanPatch.frustrationCount = patch.frustrationCount;
+  }
   try {
     if (db) {
       const ref = db.collection('wa_conversations').doc(String(phone));
