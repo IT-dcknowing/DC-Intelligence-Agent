@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { apiUrl } from '../config/env';
 import {
   FileSpreadsheet,
   FileText,
@@ -26,13 +27,18 @@ interface ConnectionsViewProps {
   onToggleConnect: (integrationId: string) => void;
   onSyncNow: (integrationId: string) => void;
   onSetTargetResource: (integrationId: string, resourceName: string) => void;
+  // Appelé quand le flux OAuth backend réussit (email réel issu du compte Google).
+  onGoogleOAuthSuccess?: (integrationId: string, email: string) => void;
 }
+
+const isGoogleIntegration = (id: string) => id === 'google-sheets' || id === 'google-docs';
 
 export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
   integrations: integrationsProp,
   onToggleConnect,
   onSyncNow,
   onSetTargetResource,
+  onGoogleOAuthSuccess,
 }) => {
   // Valeur par défaut défensive : évite le crash si Firestore/state renvoie undefined/null
   const integrations: WorkspaceIntegration[] = Array.isArray(integrationsProp) ? integrationsProp : [];
@@ -59,28 +65,72 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
     );
   }
 
-  const handleConnectClick = () => {
-    // OAuth réel : si déconnecté → ouvrir fenêtre Google de consentement
-    if (selectedIntegration.status !== 'connected') {
-      const scopes = selectedIntegration.scopes.join(' ');
-      // Client ID configuré via .env (VITE_GOOGLE_CLIENT_ID) — jamais committé
-      const clientId = (import.meta as any)?.env?.VITE_GOOGLE_CLIENT_ID?.trim?.() || '';
-      const redirectUri = `${window.location.origin}/oauth/callback`;
-      if (clientId) {
-        const authUrl =
-          `https://accounts.google.com/o/oauth2/v2/auth` +
-          `?client_id=${encodeURIComponent(clientId)}` +
-          `&redirect_uri=${encodeURIComponent(redirectUri)}` +
-          `&response_type=token` +
-          `&scope=${encodeURIComponent(scopes)}` +
-          `&access_type=offline&prompt=consent`;
-        window.open(authUrl, '_blank', 'width=500,height=600');
+  // Écoute le retour de la popup OAuth (postMessage du backend après échange code<->tokens).
+  useEffect(() => {
+    const onMessage = async (event: MessageEvent) => {
+      if (event.origin !== window.location.origin) return;
+      const data = event.data as any;
+      if (!data || data.type !== 'google-oauth' || typeof data.ok !== 'boolean') return;
+      if (data.ok) {
+        try {
+          const res = await fetch(apiUrl(`/google/status?integration=${selectedIntegration.id}`));
+          const json = await res.json().catch(() => ({}));
+          if (onGoogleOAuthSuccess) {
+            onGoogleOAuthSuccess(selectedIntegration.id, String((json as any)?.email || ''));
+          } else {
+            onToggleConnect(selectedIntegration.id);
+          }
+          setFeedbackNotice(`${selectedIntegration.name} est maintenant connecté (OAuth 2.0).`);
+        } catch {
+          onToggleConnect(selectedIntegration.id);
+          setFeedbackNotice(`${selectedIntegration.name} est maintenant connecté.`);
+        }
+      } else {
+        setFeedbackNotice(`Connexion Google refusée ou échouée (${String(data.label || 'erreur').slice(0, 80)}).`);
+      }
+      setTimeout(() => setFeedbackNotice(null), 5000);
+    };
+    window.addEventListener('message', onMessage);
+    return () => window.removeEventListener('message', onMessage);
+  }, [selectedIntegration.id, selectedIntegration.name, onToggleConnect, onGoogleOAuthSuccess]);
+
+  const handleConnectClick = async () => {
+    // Déconnexion : révocation Google côté backend + suppression du coffre Firestore.
+    if (selectedIntegration.status === 'connected' && isGoogleIntegration(selectedIntegration.id)) {
+      try {
+        await fetch(apiUrl('/google/disconnect'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ integration: selectedIntegration.id }),
+        });
+      } catch { /* repli : bascule locale quand même */ }
+      onToggleConnect(selectedIntegration.id);
+      setFeedbackNotice(`${selectedIntegration.name} est maintenant déconnecté (jeton révoqué).`);
+      setTimeout(() => setFeedbackNotice(null), 3000);
+      return;
+    }
+    // Connexion Google : le flux passe par le backend (generateAuthUrl), jamais en implicite.
+    // LegalFlow MCP garde son toggle direct (pas de Google).
+    if (selectedIntegration.status !== 'connected' && isGoogleIntegration(selectedIntegration.id)) {
+      try {
+        const res = await fetch(apiUrl(`/google/auth-url?integration=${selectedIntegration.id}`));
+        const json = await res.json().catch(() => ({}));
+        const url = String((json as any)?.url || '');
+        if (!res.ok || !url) {
+          const detail = String((json as any)?.detail || (json as any)?.error || 'serveur injoignable').slice(0, 160);
+          setFeedbackNotice(`OAuth indisponible : ${detail} — vérifiez GOOGLE_OAUTH_CLIENT_ID/SECRET côté backend.`);
+          setTimeout(() => setFeedbackNotice(null), 6000);
+          return;
+        }
+        window.open(url, '_blank', 'width=520,height=640');
         setFeedbackNotice(`Fenêtre Google ouverte — autorisez l'accès ${selectedIntegration.name} puis revenez.`);
+        setTimeout(() => setFeedbackNotice(null), 8000);
+        return;
+      } catch {
+        setFeedbackNotice('OAuth indisponible : serveur injoignable.');
         setTimeout(() => setFeedbackNotice(null), 5000);
         return;
       }
-      // Fallback dev : si pas de CLIENT_ID configuré, on simule le toggle (sera remplacé en prod)
-      // En prod avec vrai flux, cette branche ne sera jamais prise
     }
     onToggleConnect(selectedIntegration.id);
     const nextStatus = selectedIntegration.status === 'connected' ? 'déconnecté' : 'connecté';

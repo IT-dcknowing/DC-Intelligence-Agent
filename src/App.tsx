@@ -625,7 +625,32 @@ export default function App() {
   // =========================================================================
   // WORKSPACE INTEGRATIONS HANDLERS (Google Sheets & Google Docs)
   // =========================================================================
-  // OAuth réel Google : le token est obtenu via popup consentement (voir ConnectionsView).
+  // OAuth 2.0 Google : popup consentement -> backend échange code<->tokens et range
+  // le refresh_token dans Firestore (users/admin/connections). Le front ne voit
+  // jamais que l'email du compte + le statut via /api/google/status.
+  const handleGoogleOAuthSuccess = (integrationId: string, email: string) => {
+    const current = integrations.find((i) => i.id === integrationId);
+    if (!current) return;
+    const updated: WorkspaceIntegration = {
+      ...current,
+      status: 'connected',
+      accountEmail: email || current.accountEmail,
+      connectedAt: 'Aujourd’hui',
+      syncHistory: [
+        {
+          id: `log-${Date.now()}`,
+          timestamp: 'À l’instant',
+          action: 'Association réussie du compte Google Workspace (OAuth 2.0, refresh_token en coffre)',
+          status: 'success' as const,
+        },
+        ...(current.syncHistory || []),
+      ],
+    };
+    persistIntegration(updated).catch(() => {});
+    setIntegrations((prev) => prev.map((item) => (item.id === integrationId ? updated : item)));
+    addToast('success', 'Compte Google connecté', email || integrationId);
+  };
+
   // handleToggleConnect est appelé après succès OAuth côté ConnectionsView.
   const handleToggleConnectIntegration = (integrationId: string) => {
     const current = integrations.find((i) => i.id === integrationId);
@@ -933,6 +958,7 @@ export default function App() {
               onToggleConnect={handleToggleConnectIntegration}
               onSyncNow={handleSyncNow}
               onSetTargetResource={handleSetTargetResource}
+              onGoogleOAuthSuccess={handleGoogleOAuthSuccess}
             />
           </ErrorBoundary>
         )}

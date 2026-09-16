@@ -740,6 +740,256 @@ app.get(['/api/models', '/models'], async (req, res) => {
   }
 });
 
+// ============ GOOGLE OAUTH 2.0 (connecteurs Sheets/Docs) ============
+// Firestore ne gère PAS le flux : il n'est que le coffre-fort des refresh_tokens.
+// Circuit : front -> GET /api/google/auth-url -> popup Google (consentement) ->
+// GET /oauth/callback (échange code<->tokens, stockage Firestore) -> postMessage.
+// Révocation : POST /api/google/disconnect (revoke Google + suppression doc).
+// Plateforme single-admin : un seul UID (DC_ADMIN_UID, défaut 'admin'), pas de multi-user.
+const GOOGLE_OAUTH_SCOPES = {
+  'google-sheets': [
+    'https://www.googleapis.com/auth/spreadsheets',
+    'https://www.googleapis.com/auth/drive.file',
+    'https://www.googleapis.com/auth/userinfo.email',
+  ],
+  'google-docs': [
+    'https://www.googleapis.com/auth/documents',
+    'https://www.googleapis.com/auth/drive.file',
+    'https://www.googleapis.com/auth/userinfo.email',
+  ],
+};
+const ADMIN_UID = (process.env.DC_ADMIN_UID || 'admin').trim() || 'admin';
+const STATE_TTL_MS = 10 * 60 * 1000;
+
+function googleOAuthConf() {
+  const clientId = (process.env.GOOGLE_OAUTH_CLIENT_ID || '').trim();
+  const clientSecret = (process.env.GOOGLE_OAUTH_CLIENT_SECRET || '').trim();
+  const redirectUri = (process.env.GOOGLE_OAUTH_REDIRECT_URI || '').trim()
+    || 'https://us-central1-dcintelligenceio.cloudfunctions.net/whatsappWebhook/oauth/callback';
+  return { clientId, clientSecret, redirectUri };
+}
+
+function googleOAuthClient() {
+  const { google } = require('googleapis');
+  const { clientId, clientSecret, redirectUri } = googleOAuthConf();
+  if (!clientId || !clientSecret) {
+    throw Object.assign(new Error('backend_not_configured: GOOGLE_OAUTH_CLIENT_ID/SECRET manquants'), { status: 503 });
+  }
+  return new google.auth.OAuth2(clientId, clientSecret, redirectUri);
+}
+
+function encodeOAuthState(integration) {
+  const payload = { uid: ADMIN_UID, integration, ts: Date.now() };
+  return Buffer.from(JSON.stringify(payload)).toString('base64url');
+}
+
+function decodeOAuthState(state) {
+  const payload = JSON.parse(Buffer.from(String(state || ''), 'base64url').toString('utf8'));
+  if (!payload || payload.uid !== ADMIN_UID || !GOOGLE_OAUTH_SCOPES[payload.integration]) {
+    throw Object.assign(new Error('oauth_state_invalide'), { status: 400 });
+  }
+  if (!Number.isFinite(payload.ts) || Date.now() - payload.ts > STATE_TTL_MS) {
+    throw Object.assign(new Error('oauth_state_expire'), { status: 400 });
+  }
+  return payload;
+}
+
+function googleConnRef(uid, integration) {
+  if (!db) return null;
+  return db.collection('users').doc(String(uid)).collection('connections').doc(String(integration));
+}
+
+// Étape 1 : URL d'autorisation Google (le front ouvre la popup vers cette URL).
+// Fonction pure (testable) : ne touche ni Firestore ni le réseau.
+function buildGoogleAuthUrl(integration) {
+  if (!GOOGLE_OAUTH_SCOPES[integration]) {
+    throw Object.assign(new Error('integration inconnue (google-sheets | google-docs)'), { status: 400 });
+  }
+  const oauth2 = googleOAuthClient();
+  const { redirectUri } = googleOAuthConf();
+  const url = oauth2.generateAuthUrl({
+    access_type: 'offline', // indispensable : délivre le refresh_token permanent
+    prompt: 'consent', // force le consentement -> garantit un refresh_token à chaque connexion
+    scope: GOOGLE_OAUTH_SCOPES[integration],
+    state: encodeOAuthState(integration),
+    redirect_uri: redirectUri,
+  });
+  return { url, redirectUri };
+}
+
+app.get(['/api/google/auth-url', '/google/auth-url'], async (req, res) => {
+  if (!checkRateLimit(req, res, 10)) return;
+  const integration = String(req.query.integration || 'google-sheets');
+  try {
+    const { url, redirectUri } = buildGoogleAuthUrl(integration);
+    return res.status(200).json({ ok: true, url, redirectUri });
+  } catch (e) {
+    const msg = String((e && e.message) || 'oauth_unavailable');
+    if (/^backend_not_configured/.test(msg)) {
+      return res.status(503).json({ error: 'backend_not_configured', detail: 'GOOGLE_OAUTH_CLIENT_ID/SECRET manquants côté backend.' });
+    }
+    return res.status(502).json({ error: 'oauth_unavailable', detail: msg.slice(0, 200) });
+  }
+});
+
+// Étape 2 : callback Google -> échange code<->tokens -> coffre Firestore -> postMessage + fermeture popup.
+async function handleGoogleOAuthCallback(req, res) {
+  if (!checkRateLimit(req, res, 10)) return;
+  const finish = (ok, label) => {
+    const appUrl = (process.env.APP_URL || 'https://dcintelligenceio.web.app').replace(/\/$/, '');
+    const payload = JSON.stringify({ type: 'google-oauth', ok, label: String(label || '').slice(0, 200) });
+    res.status(200).set('Content-Type', 'text/html; charset=utf-8').send(
+      `<!doctype html><html><body><script>` +
+      `(function(){try{if(window.opener){window.opener.postMessage(${payload},${JSON.stringify(appUrl)});}}catch(e){} ` +
+      `setTimeout(function(){window.close();},800); ` +
+      `setTimeout(function(){window.location.href=${JSON.stringify(appUrl + '/connexions?google=' + (ok ? 'ok' : 'erreur'))};},2500);` +
+      `})();</script><p style="font-family:sans-serif">Connexion Google ${ok ? 'réussie' : 'échouée'} — vous pouvez fermer cette fenêtre.</p></body></html>`
+    );
+  };
+  let integration = 'google-sheets';
+  try {
+    if (req.query.error) throw Object.assign(new Error('oauth_refuse:' + String(req.query.error).slice(0, 80)), { status: 400 });
+    const { integration: integ } = decodeOAuthState(req.query.state);
+    integration = integ;
+    const code = String(req.query.code || '');
+    if (!code) throw Object.assign(new Error('oauth_code_manquant'), { status: 400 });
+    const oauth2 = googleOAuthClient();
+    const { tokens } = await withTimeout(oauth2.getToken(code), 15000, 'oauth_exchange_timeout');
+    if (!tokens || !tokens.refresh_token) {
+      // Sans refresh_token, l'agent devrait redemander le consentement à chaque heure : on refuse.
+      throw Object.assign(new Error('oauth_sans_refresh_token'), { status: 502 });
+    }
+    oauth2.setCredentials(tokens);
+    const me = await withTimeout(
+      require('googleapis').google.oauth2({ version: 'v2', auth: oauth2 }).userinfo.get(), 10000, 'oauth_userinfo_timeout'
+    ).catch(() => ({ data: {} }));
+    const email = String((me && me.data && me.data.email) || '').slice(0, 120);
+    const doc = {
+      provider: 'google',
+      integration,
+      refresh_token: String(tokens.refresh_token),
+      access_token: String(tokens.access_token || ''),
+      expiry_date: Number(tokens.expiry_date) || 0,
+      scopes: GOOGLE_OAUTH_SCOPES[integration],
+      account_email: email,
+      connected_at: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    const ref = googleConnRef(ADMIN_UID, integration);
+    if (ref) {
+      await withDb(ref.set(doc, { merge: false }), 'googleOAuth:store');
+    } else {
+      memoryStore.google_oauth = memoryStore.google_oauth || {};
+      memoryStore.google_oauth[integration] = doc;
+    }
+    // Jamais de secret dans les logs : email + intégration uniquement.
+    console.log(`[OAUTH] google connecté intégration=${integration} email=${email || 'inconnu'}`);
+    return finish(true, integration);
+  } catch (e) {
+    console.warn('[OAUTH] callback échec', String((e && e.message) || e).slice(0, 150));
+    return finish(false, String((e && e.message) || 'oauth_echec').slice(0, 120));
+  }
+}
+app.get(['/oauth/callback', '/api/oauth/callback'], handleGoogleOAuthCallback);
+
+// Statut public (sans secrets) : le front marque la carte Connecté + email réel.
+app.get(['/api/google/status', '/google/status'], async (req, res) => {
+  if (!checkRateLimit(req, res, 30)) return;
+  const integration = String(req.query.integration || 'google-sheets');
+  if (!GOOGLE_OAUTH_SCOPES[integration]) {
+    return res.status(400).json({ error: 'integration inconnue (google-sheets | google-docs)' });
+  }
+  try {
+    const ref = googleConnRef(ADMIN_UID, integration);
+    let doc = null;
+    if (ref) {
+      const snap = await withDb(ref.get(), 'googleOAuth:status');
+      if (snap.exists) doc = snap.data();
+    } else if (memoryStore.google_oauth) {
+      doc = memoryStore.google_oauth[integration] || null;
+    }
+    if (!doc || !doc.refresh_token) {
+      return res.status(200).json({ ok: true, connected: false, integration });
+    }
+    return res.status(200).json({
+      ok: true, connected: true, integration,
+      email: String(doc.account_email || ''),
+      scopes: Array.isArray(doc.scopes) ? doc.scopes : [],
+      connectedAt: String(doc.connected_at || ''),
+    });
+  } catch (e) {
+    return res.status(502).json({ error: 'oauth_status_unreachable' });
+  }
+});
+
+// Déconnexion : révocation Google + suppression du coffre Firestore.
+app.post(['/api/google/disconnect', '/google/disconnect'], async (req, res) => {
+  if (!checkRateLimit(req, res, 10)) return;
+  const integration = String((req.body && req.body.integration) || req.query.integration || 'google-sheets');
+  if (!GOOGLE_OAUTH_SCOPES[integration]) {
+    return res.status(400).json({ error: 'integration inconnue (google-sheets | google-docs)' });
+  }
+  try {
+    const ref = googleConnRef(ADMIN_UID, integration);
+    let doc = null;
+    if (ref) {
+      const snap = await withDb(ref.get(), 'googleOAuth:read');
+      if (snap.exists) doc = snap.data();
+    } else if (memoryStore.google_oauth) {
+      doc = memoryStore.google_oauth[integration] || null;
+    }
+    const token = doc && (doc.access_token || doc.refresh_token);
+    if (token) {
+      await fetchUpstream(`https://oauth2.googleapis.com/revoke?token=${encodeURIComponent(token)}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      }, 'google').catch(() => null);
+    }
+    if (ref) {
+      await withDb(ref.delete().catch(() => {}), 'googleOAuth:delete');
+    } else if (memoryStore.google_oauth) {
+      delete memoryStore.google_oauth[integration];
+    }
+    console.log(`[OAUTH] google déconnecté intégration=${integration}`);
+    return res.status(200).json({ ok: true, integration });
+  } catch (e) {
+    return res.status(502).json({ error: 'oauth_disconnect_failed' });
+  }
+});
+
+// Helper agent : access_token frais depuis le refresh_token du coffre (usage interne).
+async function getGoogleAccessToken(integration) {
+  if (!GOOGLE_OAUTH_SCOPES[integration]) throw Object.assign(new Error('integration inconnue'), { status: 400 });
+  const ref = googleConnRef(ADMIN_UID, integration);
+  let doc = null;
+  if (ref) {
+    const snap = await withDb(ref.get(), 'googleOAuth:read');
+    if (snap.exists) doc = snap.data();
+  } else if (memoryStore.google_oauth) {
+    doc = memoryStore.google_oauth[integration] || null;
+  }
+  if (!doc || !doc.refresh_token) {
+    throw Object.assign(new Error('backend_not_configured: compte Google non connecté pour ' + integration), { status: 503 });
+  }
+  if (doc.access_token && Number(doc.expiry_date) > Date.now() + 60000) {
+    return String(doc.access_token);
+  }
+  const oauth2 = googleOAuthClient();
+  oauth2.setCredentials({ refresh_token: String(doc.refresh_token) });
+  const { credentials } = await withTimeout(oauth2.refreshAccessToken(), 15000, 'oauth_refresh_timeout');
+  const patch = {
+    access_token: String(credentials.access_token || ''),
+    expiry_date: Number(credentials.expiry_date) || 0,
+    updatedAt: new Date().toISOString(),
+  };
+  if (ref) {
+    await withDb(ref.set(patch, { merge: true }), 'googleOAuth:refresh');
+  } else if (memoryStore.google_oauth && memoryStore.google_oauth[integration]) {
+    Object.assign(memoryStore.google_oauth[integration], patch);
+  }
+  if (!patch.access_token) throw Object.assign(new Error('oauth_refresh_echec'), { status: 502 });
+  return patch.access_token;
+}
+
 // --- Proxy LLM sécurisé : le front appelle /api/chat, la clé reste côté serveur ---
 // Supporte /api/chat (prod Firebase) et /chat (dev via vite proxy rewrite).
 app.post(['/api/chat', '/chat'], async (req, res) => {
@@ -1696,4 +1946,4 @@ app.all(['/api/*', '/webhook/*'], (req, res) => {
 exports.whatsappWebhook = functions.https.onRequest(app);
 
 // Exportés pour tests locaux uniquement (aucun effet en prod).
-exports.__testUtils = { withTimeout, withDb, fetchUpstream };
+exports.__testUtils = { withTimeout, withDb, fetchUpstream, encodeOAuthState, decodeOAuthState, buildGoogleAuthUrl, GOOGLE_OAUTH_SCOPES };

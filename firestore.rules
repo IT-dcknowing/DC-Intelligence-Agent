@@ -26,6 +26,11 @@ service cloud.firestore {
     match /integrations/{doc} {
       allow read, write: if false;
     }
+    // Coffre OAuth Google (refresh_tokens) : backend Admin SDK uniquement.
+    // Le front ne voit jamais ces documents (statut/email via /api/google/status).
+    match /users/{uid}/connections/{conn} {
+      allow read, write: if false;
+    }
     // Journal WhatsApp DC : écrit par le pipeline backend uniquement.
     match /wa_conversations/{doc} {
       allow read, write: if false;
