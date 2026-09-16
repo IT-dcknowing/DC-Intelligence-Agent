@@ -473,7 +473,7 @@ async function handleInboundMessage(wa, { wamid, from, type, msg }) {
         ],
         temperature: 0,
         maxTokens: 120,
-      }), 12000, 'classify_timeout');
+      }), 8000, 'classify_timeout');
       const m = reply.match(/"(invoice|tax_notice|bank_statement|legal_contract|general_query)"/);
       if (m) { docType = m[1]; confidence = 0.85; }
     }
@@ -554,17 +554,27 @@ async function handleInboundMessage(wa, { wamid, from, type, msg }) {
   await refreshTypingIfSlow();
 
   // Composition du RÉSULTAT (seul message « utile », après les présences).
+  // Free-tier fluctuant : en cas d'échec/timeout du modèle principal, un 2e
+  // modèle gratuit prend le relais avant le message d'excuse.
+  const primaryModel = route.agent === 'accueil' ? 'nex-agi/nex-n2.5-mini:free' : 'inclusionai/ling-3.0-flash-fin:free';
+  const fallbackModel = primaryModel === 'nex-agi/nex-n2.5-mini:free' ? 'inclusionai/ling-3.0-flash-fin:free' : 'nex-agi/nex-n2.5-mini:free';
+  const composeMessages = [
+    { role: 'system', content: `${waConv.PERSONA_SYSTEM} Contexte dossier : entreprise=${companyLabel || 'non identifiée'}, domaine=${route.domain}. Données outils : ${toolContext.slice(0, 4000) || 'aucune'}. Si les données sont insuffisantes, dis ce qu’il te manque au lieu d’inventer.` },
+    { role: 'user', content: `Message client (${docType}, confiance ${confidence}) : ${extractedText.slice(0, 2500)}${entities && entities.amount ? ` [montant détecté : ${entities.amount}]` : ''}` },
+  ];
   let answer = '';
   try {
-    answer = await withTimeout(openRouterChat({
-      model: route.agent === 'accueil' ? 'nex-agi/nex-n2.5-mini:free' : 'inclusionai/ling-3.0-flash-fin:free',
-      messages: [
-        { role: 'system', content: `${waConv.PERSONA_SYSTEM} Contexte dossier : entreprise=${companyLabel || 'non identifiée'}, domaine=${route.domain}. Données outils : ${toolContext.slice(0, 4000) || 'aucune'}. Si les données sont insuffisantes, dis ce qu’il te manque au lieu d’inventer.` },
-        { role: 'user', content: `Message client (${docType}, confiance ${confidence}) : ${extractedText.slice(0, 2500)}${entities && entities.amount ? ` [montant détecté : ${entities.amount}]` : ''}` },
-      ],
-      temperature: 0.4,
-      maxTokens: 900,
-    }), 30000, 'compose_timeout');
+    try {
+      answer = await withTimeout(openRouterChat({
+        model: primaryModel, messages: composeMessages, temperature: 0.4, maxTokens: 700,
+      }), 22000, 'compose_timeout');
+    } catch (e1) {
+      console.warn('[WA] composition repli 2e modèle', String((e1 && e1.message) || e1).slice(0, 150));
+      await say(waConv.PRESENCE.oneMoreCheck); // RÉEL : on relance vraiment une composition
+      answer = await withTimeout(openRouterChat({
+        model: fallbackModel, messages: composeMessages, temperature: 0.4, maxTokens: 700,
+      }), 22000, 'compose_timeout2');
+    }
   } catch (e) {
     console.warn('[WA] composition LLM échouée', String((e && e.message) || e).slice(0, 150));
     waConv.transition(conv, waConv.STATES.FAILED);
