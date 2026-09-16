@@ -18,12 +18,31 @@ const memoryStore = { audit: [], tasks: [], agents: [], knowledge: [], conversat
 
 const app = express();
 
-// CORS restreint : navigateurs uniquement depuis APP_URL / ALLOWED_ORIGINS.
+// CORS restreint : navigateurs uniquement depuis ALLOWED_ORIGINS (+ APP_URL).
 // Le MCP serveur-à-serveur n'est pas affecté par CORS.
-const allowedOrigins = (process.env.ALLOWED_ORIGINS || process.env.APP_URL || 'http://localhost:3000')
-  .split(',')
-  .map((s) => s.trim())
-  .filter(Boolean);
+// Défauts béton : prod web.app + dev localhost, pour ne jamais bloquer le front
+// même si l'env est incomplète (un APP_URL=localhost déployé coupait tous les /api en prod).
+const allowedOrigins = Array.from(
+  new Set(
+    (
+      (process.env.ALLOWED_ORIGINS || '') +
+      ',' +
+      (process.env.APP_URL || '') +
+      ',http://localhost:3000,https://dcintelligenceio.web.app'
+    )
+      .split(',')
+      .map((s) => s.trim().replace(/\/$/, ''))
+      .filter(Boolean)
+  )
+);
+
+function pickReturnOrigin(explicit) {
+  const o = String(explicit || '').trim().replace(/\/$/, '');
+  if (o && allowedOrigins.includes(o)) return o;
+  const app = String(process.env.APP_URL || '').trim().replace(/\/$/, '');
+  if (app && allowedOrigins.includes(app)) return app;
+  return 'https://dcintelligenceio.web.app';
+}
 
 app.use((req, res, next) => {
   const origin = req.headers.origin;
@@ -991,8 +1010,8 @@ function googleOAuthClient() {
   return new google.auth.OAuth2(clientId, clientSecret, redirectUri);
 }
 
-function encodeOAuthState(integration) {
-  const payload = { uid: ADMIN_UID, integration, ts: Date.now() };
+function encodeOAuthState(integration, origin) {
+  const payload = { uid: ADMIN_UID, integration, ts: Date.now(), origin: pickReturnOrigin(origin) };
   return Buffer.from(JSON.stringify(payload)).toString('base64url');
 }
 
@@ -1004,6 +1023,7 @@ function decodeOAuthState(state) {
   if (!Number.isFinite(payload.ts) || Date.now() - payload.ts > STATE_TTL_MS) {
     throw Object.assign(new Error('oauth_state_expire'), { status: 400 });
   }
+  payload.origin = pickReturnOrigin(payload.origin);
   return payload;
 }
 
@@ -1021,13 +1041,13 @@ function buildGoogleAuthUrl(integration) {
   const oauth2 = googleOAuthClient();
   const { redirectUri } = googleOAuthConf();
   const url = oauth2.generateAuthUrl({
-    access_type: 'offline', // indispensable : délivre le refresh_token permanent
-    prompt: 'consent', // force le consentement -> garantit un refresh_token à chaque connexion
-    scope: GOOGLE_OAUTH_SCOPES[integration],
-    state: encodeOAuthState(integration),
-    redirect_uri: redirectUri,
-  });
-  return { url, redirectUri };
+      access_type: 'offline', // indispensable : délivre le refresh_token permanent
+      prompt: 'consent', // force le consentement -> garantit un refresh_token à chaque connexion
+      scope: GOOGLE_OAUTH_SCOPES[integration],
+      state: encodeOAuthState(integration, req.query.origin),
+      redirect_uri: redirectUri,
+    });
+    return { url, redirectUri };
 }
 
 app.get(['/api/google/auth-url', '/google/auth-url'], async (req, res) => {
@@ -1048,8 +1068,10 @@ app.get(['/api/google/auth-url', '/google/auth-url'], async (req, res) => {
 // Étape 2 : callback Google -> échange code<->tokens -> coffre Firestore -> postMessage + fermeture popup.
 async function handleGoogleOAuthCallback(req, res) {
   if (!checkRateLimit(req, res, 10)) return;
-  const finish = (ok, label) => {
-    const appUrl = (process.env.APP_URL || 'https://dcintelligenceio.web.app').replace(/\/$/, '');
+  const finish = (ok, label, returnOrigin) => {
+    // Origine validée via le state (allowlist) : le postMessage n'est plus jamais perdu
+    // même si APP_URL est mal configuré côté serveur.
+    const appUrl = pickReturnOrigin(returnOrigin);
     const payload = JSON.stringify({ type: 'google-oauth', ok, label: String(label || '').slice(0, 200) });
     res.status(200).set('Content-Type', 'text/html; charset=utf-8').send(
       `<!doctype html><html><body><script>` +
@@ -1060,10 +1082,12 @@ async function handleGoogleOAuthCallback(req, res) {
     );
   };
   let integration = 'google-sheets';
+  let returnOrigin = pickReturnOrigin(null);
   try {
     if (req.query.error) throw Object.assign(new Error('oauth_refuse:' + String(req.query.error).slice(0, 80)), { status: 400 });
-    const { integration: integ } = decodeOAuthState(req.query.state);
-    integration = integ;
+    const decoded = decodeOAuthState(req.query.state);
+    integration = decoded.integration;
+    returnOrigin = decoded.origin;
     const code = String(req.query.code || '');
     if (!code) throw Object.assign(new Error('oauth_code_manquant'), { status: 400 });
     const oauth2 = googleOAuthClient();
@@ -1097,10 +1121,10 @@ async function handleGoogleOAuthCallback(req, res) {
     }
     // Jamais de secret dans les logs : email + intégration uniquement.
     console.log(`[OAUTH] google connecté intégration=${integration} email=${email || 'inconnu'}`);
-    return finish(true, integration);
+    return finish(true, integration, returnOrigin);
   } catch (e) {
     console.warn('[OAUTH] callback échec', String((e && e.message) || e).slice(0, 150));
-    return finish(false, String((e && e.message) || 'oauth_echec').slice(0, 120));
+    return finish(false, String((e && e.message) || 'oauth_echec').slice(0, 120), returnOrigin);
   }
 }
 app.get(['/oauth/callback', '/api/oauth/callback'], handleGoogleOAuthCallback);

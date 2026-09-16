@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { apiUrl } from '../config/env';
 import {
   FileSpreadsheet,
@@ -48,22 +48,75 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
   const [isEditingResource, setIsEditingResource] = useState<boolean>(false);
   const [feedbackNotice, setFeedbackNotice] = useState<string | null>(null);
 
-  // Garde-fou : si la liste est vide ou l'id sélectionné n'existe plus, retombe proprement
-  const selectedIntegration: WorkspaceIntegration | undefined =
-    integrations.find((i) => i.id === selectedId) || integrations[0];
+  // Garde-fou : si la liste est vide ou l'id sélectionné n'existe plus, retombe proprement.
+  // Objet de repli typé pour que tous les hooks/handlers restent inconditionnels (règles React).
+  const EMPTY_INTEGRATION: WorkspaceIntegration = {
+    id: 'google-sheets',
+    name: 'Google Sheets',
+    description: '',
+    iconType: 'sheets',
+    status: 'disconnected',
+    scopes: [],
+    syncCount: 0,
+    syncHistory: [],
+  };
+  const selectedIntegration: WorkspaceIntegration =
+    integrations.find((i) => i.id === selectedId) || integrations[0] || EMPTY_INTEGRATION;
+  const isEmpty = integrations.length === 0;
 
-  // État vide géré au lieu de crasher avec TypeError
-  if (!selectedIntegration || integrations.length === 0) {
-    return (
-      <div className="flex-1 flex flex-col items-center justify-center p-8 text-center bg-white" style={{ fontFamily: "'Inter', sans-serif" }}>
-        <div className="w-12 h-12 rounded-xl bg-[#F4F4F5] border border-[#E5E5E7] flex items-center justify-center mb-3">
-          <Layers className="w-6 h-6 text-[#71717A]" />
-        </div>
-        <h3 className="font-bold text-[15px] text-[#1E293B]">Impossible de charger les connexions</h3>
-        <p className="text-[12px] text-[#64748B] max-w-md mt-1">Aucune intégration disponible. Vérifiez la configuration Firestore ou rechargez la page.</p>
-      </div>
-    );
-  }
+  // Réconciliation avec le coffre backend : l'état local (cache) peut mentir
+  // (tokens présents mais carte "Non associé", ou l'inverse après révocation).
+  // Le vault Firestore via /api/google/status fait foi, sans jamais exposer de secret.
+  const reconciledRef = useRef(false);
+  const lastFocusCheckRef = useRef(0);
+  const reconcileGoogleStatus = useCallback(
+    async (announce: boolean) => {
+      for (const item of integrations.filter((i) => isGoogleIntegration(i.id))) {
+        try {
+          const res = await fetch(apiUrl(`/google/status?integration=${item.id}`));
+          const json = await res.json().catch(() => ({}));
+          const connected = res.ok && Boolean((json as any)?.connected);
+          if (connected && item.status !== 'connected' && onGoogleOAuthSuccess) {
+            onGoogleOAuthSuccess(item.id, String((json as any)?.email || ''));
+            if (announce) {
+              setFeedbackNotice(`${item.name} : session Google retrouvée (${String((json as any)?.email || 'compte actif')}).`);
+              setTimeout(() => setFeedbackNotice(null), 4000);
+            }
+          } else if (!connected && item.status === 'connected') {
+            onToggleConnect(item.id);
+            if (announce) {
+              setFeedbackNotice(`${item.name} : jeton invalide côté Google, reconnectez le compte.`);
+              setTimeout(() => setFeedbackNotice(null), 5000);
+            }
+          }
+        } catch {
+          // Backend injoignable : on ne touche à rien (repli local).
+        }
+      }
+    },
+    [integrations, onToggleConnect, onGoogleOAuthSuccess]
+  );
+
+  useEffect(() => {
+    if (reconciledRef.current) return;
+    reconciledRef.current = true;
+    reconcileGoogleStatus(false);
+  }, [reconcileGoogleStatus]);
+
+  // L'utilisateur peut consentir puis fermer la popup à la main : au retour du
+  // focus on revérifie (débouncé 5 s) pour afficher l'état réel sans refresh.
+  useEffect(() => {
+    const onFocus = () => {
+      const now = Date.now();
+      if (now - lastFocusCheckRef.current < 5000) return;
+      lastFocusCheckRef.current = now;
+      reconcileGoogleStatus(false);
+    };
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
+  }, [reconcileGoogleStatus]);
+
+  const isLegalFlow = selectedIntegration.id === 'legal-flow';
 
   // Écoute le retour de la popup OAuth (postMessage du backend après échange code<->tokens).
   useEffect(() => {
@@ -113,7 +166,10 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
     // LegalFlow MCP garde son toggle direct (pas de Google).
     if (selectedIntegration.status !== 'connected' && isGoogleIntegration(selectedIntegration.id)) {
       try {
-        const res = await fetch(apiUrl(`/google/auth-url?integration=${selectedIntegration.id}`));
+        // Origine transmise au backend : le callback y renvoie le postMessage (allowlist côté serveur).
+        const res = await fetch(
+          apiUrl(`/google/auth-url?integration=${selectedIntegration.id}&origin=${encodeURIComponent(window.location.origin)}`)
+        );
         const json = await res.json().catch(() => ({}));
         const url = String((json as any)?.url || '');
         if (!res.ok || !url) {
@@ -138,7 +194,22 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
     setTimeout(() => setFeedbackNotice(null), 3000);
   };
 
-  const handleTriggerSync = () => {
+  const handleTriggerSync = async () => {
+    // Pré-contrôle réel : inutile de déclarer un succès si le jeton est mort côté Google.
+    if (isGoogleIntegration(selectedIntegration.id)) {
+      try {
+        const res = await fetch(apiUrl(`/google/status?integration=${selectedIntegration.id}`));
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || !(json as any)?.connected) {
+          if (selectedIntegration.status === 'connected') onToggleConnect(selectedIntegration.id);
+          setFeedbackNotice(`Synchronisation impossible : compte Google non connecté pour ${selectedIntegration.name}. Reconnectez-le d'abord.`);
+          setTimeout(() => setFeedbackNotice(null), 5000);
+          return;
+        }
+      } catch {
+        // Backend injoignable : on continue en mode local (repli dev).
+      }
+    }
     setIsSyncing(true);
     setTimeout(() => {
       onSyncNow(selectedIntegration.id);
@@ -167,6 +238,19 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
     setFeedbackNotice(`Nouveau fichier configuré : ${defaultName}`);
     setTimeout(() => setFeedbackNotice(null), 3000);
   };
+
+  // État vide géré (après tous les hooks) au lieu de crasher avec TypeError.
+  if (isEmpty) {
+    return (
+      <div className="flex-1 flex flex-col items-center justify-center p-8 text-center bg-white" style={{ fontFamily: "'Inter', sans-serif" }}>
+        <div className="w-12 h-12 rounded-xl bg-[#F4F4F5] border border-[#E5E5E7] flex items-center justify-center mb-3">
+          <Layers className="w-6 h-6 text-[#71717A]" />
+        </div>
+        <h3 className="font-bold text-[15px] text-[#1E293B]">Impossible de charger les connexions</h3>
+        <p className="text-[12px] text-[#64748B] max-w-md mt-1">Aucune intégration disponible. Vérifiez la configuration Firestore ou rechargez la page.</p>
+      </div>
+    );
+  }
 
   return (
     <div className="flex-1 flex h-full min-w-0 overflow-hidden bg-white" style={{ fontFamily: "'Inter', sans-serif" }}>
@@ -363,8 +447,82 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
         {/* Content Body */}
         <div className="p-6 max-w-4xl space-y-6">
           {/* ================================================================ */}
-          {/* ÉTAPE 1 : COMPTE GOOGLE WORKSPACE                                 */}
+          {/* ÉTAPE 1 : COMPTE / SERVEUR (Google OAuth vs MCP LegalFlow)        */}
           {/* ================================================================ */}
+          {isLegalFlow ? (
+          <div className="p-5 rounded-2xl border border-[#E2E8F0] bg-[#F8FAFC] space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <span className="w-6 h-6 rounded-full bg-black text-white text-[11px] font-bold flex items-center justify-center">
+                  1
+                </span>
+                <h3 className="font-bold text-[15px] text-[#1E293B]">
+                  Serveur MCP LegalFlow
+                </h3>
+              </div>
+
+              <span className="text-[11px] text-[#64748B] font-mono">
+                Protocole MCP
+              </span>
+            </div>
+
+            <p className="text-[13px] text-[#64748B] leading-relaxed">
+              Connecteur Model Context Protocol pour la recherche juridique et la conformité fiscale zone OHADA / UEMOA. Pas de compte Google ici : l'association se fait directement.
+            </p>
+
+            {selectedIntegration.status === 'connected' ? (
+              <div className="p-4 rounded-xl bg-white border border-emerald-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-full bg-purple-100 text-purple-800 font-bold flex items-center justify-center text-sm border border-purple-300">
+                    LF
+                  </div>
+                  <div>
+                    <div className="text-[13px] font-bold text-[#1E293B] font-mono">
+                      {selectedIntegration.endpointUrl || 'Endpoint MCP non configuré'}
+                    </div>
+                    <div className="text-[11px] text-[#64748B]">
+                      Associé • Protocole MCP actif
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleConnectClick}
+                    className="px-3 py-1.5 rounded-lg border border-red-200 text-red-700 bg-red-50 hover:bg-red-100 font-semibold text-[12px] flex items-center gap-1.5 transition-colors cursor-pointer"
+                  >
+                    <Unlink className="w-3.5 h-3.5" />
+                    <span>Dissocier</span>
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="p-4 rounded-xl bg-white border border-[#E2E8F0] space-y-3">
+                <p className="text-[12px] text-[#475569]">
+                  Le serveur MCP LegalFlow n'est actuellement pas associé.
+                </p>
+
+                <button
+                  type="button"
+                  onClick={handleConnectClick}
+                  className="px-4 py-2.5 rounded-xl bg-black hover:bg-zinc-800 text-white font-semibold text-[13px] flex items-center gap-2 transition-all shadow-xs cursor-pointer active:scale-95"
+                >
+                  <Scale className="w-4 h-4" />
+                  <span>Associer le serveur MCP</span>
+                </button>
+              </div>
+            )}
+
+            {/* Scopes description */}
+            <div className="text-[11px] text-[#94A3B8] flex items-center gap-1.5">
+              <span>Outils exposés :</span>
+              <code className="bg-zinc-100 text-zinc-700 px-1.5 py-0.5 rounded font-mono">
+                {selectedIntegration.scopes.join(', ')}
+              </code>
+            </div>
+          </div>
+          ) : (
           <div className="p-5 rounded-2xl border border-[#E2E8F0] bg-[#F8FAFC] space-y-4">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2.5">
@@ -455,6 +613,7 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
               </code>
             </div>
           </div>
+          )}
 
           {/* ================================================================ */}
           {/* ÉTAPE 2 : CLASSEUR OU DOCUMENT CIBLE                             */}
@@ -468,6 +627,8 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
                 <h3 className="font-bold text-[15px] text-[#1E293B]">
                   {selectedIntegration.id === 'google-sheets'
                     ? 'Classeur cible & Feuilles comptables'
+                    : isLegalFlow
+                    ? 'Ressource cible MCP'
                     : 'Modèle de document cible'}
                 </h3>
               </div>
@@ -480,6 +641,8 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
             <p className="text-[13px] text-[#64748B]">
               {selectedIntegration.id === 'google-sheets'
                 ? 'Sélectionnez le fichier Google Sheets dans lequel les écritures comptables générées par l’Assistant seront automatiquement insérées.'
+                : isLegalFlow
+                ? 'Nom logique de la ressource LegalFlow interrogée par les agents (recherche juridique, conformité fiscale).'
                 : 'Sélectionnez le document Google Docs qui recevra vos lettres de mission, rapports d’audit ou synthèses de bilan.'}
             </p>
 
@@ -533,7 +696,16 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
               )}
 
               {/* Format Preview */}
-              {selectedIntegration.id === 'google-sheets' ? (
+              {isLegalFlow ? (
+                <div className="mt-3 pt-3 border-t border-zinc-100 text-[11px] text-[#64748B]">
+                  <span className="font-semibold text-[#1E293B] block mb-1">
+                    Endpoint interrogé :
+                  </span>
+                  <code className="font-mono text-[10px] bg-zinc-100 text-zinc-800 px-2 py-0.5 rounded">
+                    {selectedIntegration.endpointUrl || 'non configuré'}
+                  </code>
+                </div>
+              ) : selectedIntegration.id === 'google-sheets' ? (
                 <div className="mt-3 pt-3 border-t border-zinc-100 text-[11px] text-[#64748B]">
                   <span className="font-semibold text-[#1E293B] block mb-1.5">
                     Colonnes synchronisées dans le classeur :
