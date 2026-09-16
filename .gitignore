@@ -6,3 +6,5 @@ coverage/
 *.log
 .env*
 !.env.example
+# Identifiants OAuth Google téléchargés (contient le client_secret) — jamais commité.
+client_secret*.json
