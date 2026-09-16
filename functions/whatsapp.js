@@ -141,7 +141,7 @@ function splitResult(text, maxLen = 900) {
 function isGreetingOnly(text) {
   // Salutation SEULE (aucune question derrière) -> réponse immédiate sans pipeline.
   // Inclut les variantes courtes FR/EN ("Hey", "hi", "yo") qui partaient à tort en pipeline complet.
-  return /^(bonjour|bonsoir|salut|hello|hi|hey|yo|yop|bjr|cc|coucou|bonjour\s+dc|salut\s+dc|hello\s+dc|hey\s+dc)[\s!.…]*$/i.test((text || '').trim());
+  return /^(bonjour|bonsoir|salut|hello|hi|hey|yo|yop|bjr|cc|coucou|bonjour\s+dc|salut\s+dc|hello\s+dc|hey\s+dc)[\s!.?…]*$/i.test((text || '').trim());
 }
 
 // Routeur local (miroir allégé du routerAgent front) — classification rapide avant LLM/outils.
