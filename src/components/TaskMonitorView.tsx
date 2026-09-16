@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { TaskObject, TaskStatus } from '../types';
 import { getTasksFromStorage, updateTaskStatus, createTask } from '../services/taskEngine';
+import { apiUrl } from '../config/env';
 
 interface WhatsAppSessionLog {
   phone: string;
@@ -30,24 +31,75 @@ interface WhatsAppSessionLog {
   }[];
 }
 
+interface WhatsAppOverview {
+  phone: { number: string; verifiedName: string; quality: string; verification: string };
+  stats: { conversations: number; active24h: number; delivered: number; read: number; failed: number; deadLetters: number };
+  conversations: {
+    phone: string;
+    topic: string;
+    intent: string;
+    stage: string;
+    messageCount: number;
+    updatedAt: string;
+    lastMessages: { from: string; text: string; at: string }[];
+  }[];
+}
+
 export const TaskMonitorView: React.FC = () => {
   const [activeVolet, setActiveVolet] = useState<'whatsapp' | 'tasks'>('whatsapp');
 
   // --------------------------------------------------------------------------
-  // VOLET 1 : WHATSAPP LOGS DATA & STATE
+  // VOLET 1 : WHATSAPP LOGS DATA & STATE (live depuis /api/whatsapp/overview)
   // --------------------------------------------------------------------------
   const [isRefreshingWhatsApp, setIsRefreshingWhatsApp] = useState(false);
   const [expandedPhone, setExpandedPhone] = useState<string | null>(null);
+  const [waOverview, setWaOverview] = useState<WhatsAppOverview | null>(null);
+  const [waOnline, setWaOnline] = useState<boolean | null>(null);
 
-  // Prod : démarre à 0, se peuple uniquement avec de vraies conversations WhatsApp
-  const [whatsappConversations, setWhatsappConversations] = useState<WhatsAppSessionLog[]>([]);
+  const fetchWhatsAppOverview = async () => {
+    setIsRefreshingWhatsApp(true);
+    try {
+      const res = await fetch(apiUrl('/whatsapp/overview'));
+      if (!res.ok) throw new Error(`backend_${res.status}`);
+      const data = (await res.json()) as { ok: boolean } & WhatsAppOverview;
+      if (!data || !data.ok) throw new Error('bad_payload');
+      setWaOverview(data);
+      setWaOnline(true);
+    } catch {
+      setWaOnline(false);
+    } finally {
+      setIsRefreshingWhatsApp(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchWhatsAppOverview();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleRefreshWhatsApp = () => {
-    setIsRefreshingWhatsApp(true);
-    setTimeout(() => {
-      setIsRefreshingWhatsApp(false);
-    }, 800);
+    fetchWhatsAppOverview();
   };
+
+  // Conversations live mappées vers le format d'affichage (jamais de zéros codés en dur).
+  const whatsappConversations: WhatsAppSessionLog[] = (waOverview?.conversations || []).map((c) => ({
+    phone: c.phone,
+    subject: c.topic || 'Conversation',
+    intent: c.intent || c.stage || '—',
+    messageCount: c.messageCount,
+    lastTimestamp: c.updatedAt
+      ? new Date(c.updatedAt).toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+      : '',
+    messages: (c.lastMessages || []).map((m, i) => ({
+      sender: (m.from === 'agent' ? 'agent' : 'user') as 'user' | 'agent',
+      content: m.text,
+      timestamp: m.at
+        ? new Date(m.at).toLocaleString('fr-FR', { hour: '2-digit', minute: '2-digit' })
+        : `#${i + 1}`,
+    })),
+  }));
+  const waStats = waOverview?.stats || { conversations: 0, active24h: 0, delivered: 0, read: 0, failed: 0, deadLetters: 0 };
+  const waPhone = waOverview?.phone || { number: '—', verifiedName: '', quality: 'UNKNOWN', verification: 'UNKNOWN' };
 
   // --------------------------------------------------------------------------
   // VOLET 2 : MOTEUR DE TÂCHES CENTRAL DATA & STATE
@@ -96,9 +148,21 @@ export const TaskMonitorView: React.FC = () => {
               <h1 className="text-[18px] font-bold text-[#1E293B] tracking-tight">
                 {activeVolet === 'whatsapp' ? 'WhatsApp Logs' : 'Moteur de Tâches Central'}
               </h1>
-              <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">
-                API Live Meta v26.0
-              </span>
+              {activeVolet === 'whatsapp' ? (
+                waOnline === false ? (
+                  <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-zinc-100 text-zinc-600 border border-zinc-200">
+                    Hors ligne — backend injoignable
+                  </span>
+                ) : (
+                  <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">
+                    API Live Meta v26.0
+                  </span>
+                )
+              ) : (
+                <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">
+                  API Live Meta v26.0
+                </span>
+              )}
             </div>
             <p className="text-[12px] text-[#64748B] mt-0.5">
               {activeVolet === 'whatsapp'
@@ -165,68 +229,70 @@ export const TaskMonitorView: React.FC = () => {
               <div className="flex items-center gap-2">
                 <Phone className="w-5 h-5 text-emerald-600" />
                 <span className="text-[17px] font-bold text-[#1E293B] font-mono">
-                  +225 74 52 90 52
+                  {waPhone.number}
                 </span>
               </div>
 
-              <div className="flex items-center gap-1.5 text-[13px] font-semibold text-[#1E293B]">
-                <CheckCircle2 className="w-4 h-4 text-blue-600" />
-                <span>Dc Knowing</span>
-              </div>
+              {!!waPhone.verifiedName && (
+                <div className="flex items-center gap-1.5 text-[13px] font-semibold text-[#1E293B]">
+                  <CheckCircle2 className="w-4 h-4 text-blue-600" />
+                  <span>{waPhone.verifiedName}</span>
+                </div>
+              )}
 
               <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
                 <span className="w-2 h-2 rounded-full bg-emerald-600 animate-pulse" />
-                Qualité GREEN
+                Qualité {waPhone.quality}
               </span>
 
               <span className="text-[12px] text-[#64748B]">
-                Vérification : <strong className="text-[#1E293B]">VERIFIED</strong>
+                Vérification : <strong className="text-[#1E293B]">{waPhone.verification}</strong>
               </span>
             </div>
           </div>
 
-          {/* Stats Grid (6 KPI Cards) */}
+          {/* Stats Grid (6 KPI Cards) — données live backend */}
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
             <div className="bg-white p-4 rounded-xl border border-[#E2E8F0] shadow-xs">
               <div className="text-[10px] font-bold text-[#64748B] uppercase tracking-wider">
                 CONVERSATIONS
               </div>
-              <div className="text-2xl font-bold text-[#1E293B] mt-1">{whatsappConversations.length}</div>
+              <div className="text-2xl font-bold text-[#1E293B] mt-1">{waStats.conversations}</div>
             </div>
 
             <div className="bg-white p-4 rounded-xl border border-[#E2E8F0] shadow-xs">
               <div className="text-[10px] font-bold text-[#64748B] uppercase tracking-wider">
                 ACTIVES 24 H
               </div>
-              <div className="text-2xl font-bold text-[#1E293B] mt-1">0</div>
+              <div className="text-2xl font-bold text-[#1E293B] mt-1">{waStats.active24h}</div>
             </div>
 
             <div className="bg-white p-4 rounded-xl border border-[#E2E8F0] shadow-xs">
               <div className="text-[10px] font-bold text-[#64748B] uppercase tracking-wider">
                 DISTRIBUÉS
               </div>
-              <div className="text-2xl font-bold text-[#1E293B] mt-1">0</div>
+              <div className="text-2xl font-bold text-[#1E293B] mt-1">{waStats.delivered}</div>
             </div>
 
             <div className="bg-white p-4 rounded-xl border border-[#E2E8F0] shadow-xs">
               <div className="text-[10px] font-bold text-[#64748B] uppercase tracking-wider">
                 LUS
               </div>
-              <div className="text-2xl font-bold text-[#1E293B] mt-1">0</div>
+              <div className="text-2xl font-bold text-[#1E293B] mt-1">{waStats.read}</div>
             </div>
 
             <div className="bg-white p-4 rounded-xl border border-[#E2E8F0] shadow-xs">
               <div className="text-[10px] font-bold text-[#64748B] uppercase tracking-wider text-amber-700">
                 ÉCHECS
               </div>
-              <div className="text-2xl font-bold text-[#1E293B] mt-1">0</div>
+              <div className="text-2xl font-bold text-[#1E293B] mt-1">{waStats.failed}</div>
             </div>
 
             <div className="bg-white p-4 rounded-xl border border-[#E2E8F0] shadow-xs">
               <div className="text-[10px] font-bold text-[#64748B] uppercase tracking-wider">
                 FILE DES MORTS
               </div>
-              <div className="text-2xl font-bold text-[#1E293B] mt-1">0</div>
+              <div className="text-2xl font-bold text-[#1E293B] mt-1">{waStats.deadLetters}</div>
             </div>
           </div>
 
@@ -235,6 +301,12 @@ export const TaskMonitorView: React.FC = () => {
             <h3 className="text-[15px] font-bold text-[#1E293B] mb-3">
               Conversations ({whatsappConversations.length})
             </h3>
+
+            {waOnline && whatsappConversations.length === 0 && !isRefreshingWhatsApp && (
+              <p className="text-[12px] text-[#64748B] pb-1">
+                Aucune conversation reçue pour le moment — envoyez un message WhatsApp au numéro business pour voir le pipeline en action.
+              </p>
+            )}
 
             <div className="space-y-3">
               {whatsappConversations.map((conv) => {

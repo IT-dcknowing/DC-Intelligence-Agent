@@ -14,7 +14,7 @@ try {
 } catch (e) {
   console.warn('[INIT] Firestore indisponible, fallback mémoire :', String((e && e.message) || e).slice(0, 200));
 }
-const memoryStore = { audit: [], tasks: [], agents: [], knowledge: [], conversations: [], integrations: [] };
+const memoryStore = { audit: [], tasks: [], agents: [], knowledge: [], conversations: [], integrations: [], wa_conversations: [], wa_events: [] };
 
 const app = express();
 
@@ -314,8 +314,11 @@ async function visionClassifyBuffer(buf, mime, hint) {
   };
 }
 
-// --- Meta webhook verification (GET strict, pas de wildcard) ---
-app.get(['/webhook', '/api/webhook', '/v1/whatsapp/webhook'], (req, res) => {
+// --- Meta webhook verification ---
+// Tolérance racine `/` : si Meta est configuré sur l'URL nue de la fonction
+// (sans /webhook), la vérification et les événements sont acceptés quand même.
+// HMAC et déduplication inchangés. URL canonique : <function-url>/webhook
+function handleMetaVerify(req, res) {
   const mode = req.query['hub.mode'];
   const token = req.query['hub.verify_token'];
   const challenge = req.query['hub.challenge'];
@@ -331,12 +334,17 @@ app.get(['/webhook', '/api/webhook', '/v1/whatsapp/webhook'], (req, res) => {
   }
   console.warn('[META VERIFY] Token mismatch.');
   return res.status(403).send('Forbidden: Invalid verify token');
+}
+app.get(['/webhook', '/api/webhook', '/v1/whatsapp/webhook'], handleMetaVerify);
+app.get('/', (req, res) => {
+  if (req.query && req.query['hub.mode'] !== undefined) return handleMetaVerify(req, res);
+  return res.status(200).json({ ok: true, service: 'dc-intelligence-webhook', usage: 'Meta -> /webhook (racine tolérée), API -> /api/*' });
 });
 
-// --- Meta incoming messages (POST strict + pipeline conversationnel) ---
+// --- Meta incoming messages (POST + pipeline conversationnel) ---
 // ACK 200 en fin de pipeline (deadline douce 18 s) : anti-retry Meta permanent.
 // Le perçu-instantané est assuré par READ + TYPING + messages de présence.
-app.post(['/webhook', '/api/webhook', '/v1/whatsapp/webhook'], async (req, res) => {
+async function handleMetaWebhook(req, res) {
   const sig = verifyMetaSignature(req);
   if (!sig.ok) {
     console.warn('[META WEBHOOK] HMAC invalide, rejet.');
@@ -348,7 +356,11 @@ app.post(['/webhook', '/api/webhook', '/v1/whatsapp/webhook'], async (req, res) 
     for (const entry of entries) {
       for (const change of entry.changes || []) {
         const value = change.value || {};
-        if (value.statuses) continue; // accusés de lecture/livraison : ignorés (200 quand même)
+        if (value.statuses) {
+          // Accusés Meta (sent/delivered/read/failed) : persistés pour le dashboard, 200 quand même.
+          recordWaStatuses(value.statuses).catch(() => {});
+          continue;
+        }
         for (const msg of value.messages || []) {
           const wamid = msg.id;
           if (!wamid) continue;
@@ -389,7 +401,9 @@ app.post(['/webhook', '/api/webhook', '/v1/whatsapp/webhook'], async (req, res) 
     console.warn('[WA PIPELINE] fatal', String((e && e.message) || e).slice(0, 200));
   }
   return res.status(200).send('EVENT_RECEIVED');
-});
+}
+app.post(['/webhook', '/api/webhook', '/v1/whatsapp/webhook'], handleMetaWebhook);
+app.post('/', handleMetaWebhook); // tolérance URL racine (cf. vérification GET)
 
 // --- Pipeline conversationnel : chaque présence = un événement RÉEL ---
 async function handleInboundMessage(wa, { wamid, from, type, msg }) {
@@ -409,19 +423,23 @@ async function handleInboundMessage(wa, { wamid, from, type, msg }) {
   };
 
   waConv.transition(conv, waConv.STATES.ACKNOWLEDGED);
+  // Journalisation dès l'entrée (alimente le dashboard, même si la suite échoue).
+  wa = trackWaSends(wa, { phone: from, wamid });
+  const textBody = type === 'text' ? String((msg.text && msg.text.body) || '').trim() : '';
+  const hasMedia = ['image', 'document', 'audio', 'video', 'sticker'].includes(type);
+  waLogEvent({ wamid, direction: 'in', phone: from, kind: type, preview: (textBody || `[${type}]`).slice(0, 300), state: 'RECEIVED' });
+  waUpsertConversation(from, { stage: 'RECEIVED' }, { from: 'user', text: (textBody || `[${type}]`).slice(0, 500) });
   try { await withTimeout(wa.sendRead(wamid), 4000, 'read_timeout'); } catch (e) {
     console.warn('[WA] read échoué', String((e && e.message) || e).slice(0, 150));
   }
   waConv.transition(conv, waConv.STATES.READ);
-
-  const textBody = type === 'text' ? String((msg.text && msg.text.body) || '').trim() : '';
-  const hasMedia = ['image', 'document', 'audio', 'video', 'sticker'].includes(type);
 
   // Salutation seule : réponse immédiate, sans outils (rapide → pas de typing).
   if (!hasMedia && textBody && waConv.isGreetingOnly(textBody)) {
     waConv.transition(conv, waConv.STATES.RESPONDING);
     await wa.sendText(from, 'Bonjour ! J’espère que vous allez bien. Dites-moi : une facture, un courrier fiscal, ou un point sur votre dossier ?');
     waConv.transition(conv, waConv.STATES.COMPLETED);
+    waUpsertConversation(from, { stage: 'COMPLETED', intent: 'ACCUEIL' });
     return { state: conv.state };
   }
 
@@ -467,6 +485,7 @@ async function handleInboundMessage(wa, { wamid, from, type, msg }) {
     waConv.transition(conv, waConv.STATES.WAITING_USER);
     await wa.sendText(from, 'Je n’ai pas bien saisi votre message. Pouvez-vous me le reformuler, ou m’envoyer le document en photo ?');
     waConv.transition(conv, waConv.STATES.COMPLETED);
+    waUpsertConversation(from, { stage: 'WAITING_USER' });
     return { state: conv.state };
   }
 
@@ -476,6 +495,8 @@ async function handleInboundMessage(wa, { wamid, from, type, msg }) {
   if (docType === 'tax_notice' || docType === 'legal_contract') { route.domain = 'JURIDIQUE_FISCAL'; route.agent = 'legal'; }
   else if (docType === 'invoice') { route.domain = 'COMPTABILITÉ'; route.agent = 'compta'; }
   else if (docType === 'bank_statement') { route.domain = 'RAPPROCHEMENT'; route.agent = 'reco'; }
+  const TOPIC_LABEL = { invoice: 'Facture / pièce', tax_notice: 'Avis fiscal', bank_statement: 'Relevé bancaire', legal_contract: 'Document juridique', general_query: 'Question' };
+  waUpsertConversation(from, { stage: 'ROUTING', topic: TOPIC_LABEL[docType] || 'Question', intent: route.domain });
 
   await refreshTypingIfSlow();
 
@@ -491,6 +512,7 @@ async function handleInboundMessage(wa, { wamid, from, type, msg }) {
       const names = companies.slice(0, 5).map((c, i) => `${i + 1}. ${c.nom || c.name || c.id}`).join('\n');
       await wa.sendText(from, `Vous avez plusieurs entreprises :\n${names}\nLaquelle concerne votre demande ? (répondez par le numéro)`);
       waConv.transition(conv, waConv.STATES.COMPLETED);
+      waUpsertConversation(from, { stage: 'WAITING_USER' });
       return { state: conv.state, waiting: 'company_choice' };
     }
     companyId = (companies[0] && (companies[0].id || companies[0].entreprise_id)) || ctx.entreprise_id || null;
@@ -548,6 +570,7 @@ async function handleInboundMessage(wa, { wamid, from, type, msg }) {
     waConv.transition(conv, waConv.STATES.FAILED);
     await wa.sendText(from, 'Humm, je n’arrive pas à finaliser la vérification pour le moment. Je transmets à un expert qui reviendra vers vous.');
     waConv.transition(conv, waConv.STATES.ESCALATED);
+    waUpsertConversation(from, { stage: 'ESCALATED' });
     return { state: conv.state };
   }
 
@@ -561,6 +584,7 @@ async function handleInboundMessage(wa, { wamid, from, type, msg }) {
     console.warn('[WA] fenêtre 24 h fermée, templates non gérés (cf dossier MCP §7).');
   }
   waConv.transition(conv, waConv.STATES.COMPLETED);
+  waUpsertConversation(from, { stage: 'COMPLETED' });
 
   // Traçabilité (fire-and-forget).
   try {
@@ -772,6 +796,211 @@ app.get(['/api/tasks', '/tasks'], async (req, res) => {
     return res.status(200).json({ ok: true, store: firestoreMode, tasks: rows });
   } catch (e) {
     return res.status(500).json({ error: 'task_list_failed' });
+  }
+});
+
+// ============ WHATSAPP STORE (conversations + événements, pour le dashboard) ============
+// Alimenté par le pipeline (in/out) et les statuts Meta. Lecture via /api/whatsapp/*.
+async function waLogEvent(e) {
+  try {
+    await storeDoc('wa_events', {
+      wamid: str(e.wamid, 120),
+      direction: ['in', 'out', 'status'].includes(e.direction) ? e.direction : 'in',
+      phone: str(e.phone, 30),
+      kind: str(e.kind, 20),
+      preview: str(e.preview, 300),
+      state: str(e.state, 30),
+      status: str(e.status, 20),
+      metaId: str(e.metaId, 120),
+      code: e.code != null ? String(e.code).slice(0, 20) : '',
+      error: str(e.error, 300),
+      deadLetter: Boolean(e.deadLetter),
+    });
+  } catch {}
+}
+
+// Sérialisation par téléphone : les upserts fire-and-forget s'enchaînent au lieu
+// de se marcher dessus en read-modify-write concurrent (compteurs/messages perdus).
+const waUpsertChains = new Map();
+function waUpsertConversation(phone, patch = {}, lastMsg = null) {
+  const key = String(phone);
+  const prev = waUpsertChains.get(key) || Promise.resolve();
+  const next = prev.catch(() => {}).then(() => waUpsertConversationInner(key, patch, lastMsg));
+  waUpsertChains.set(key, next);
+  if (waUpsertChains.size > 500) {
+    const first = waUpsertChains.keys().next().value;
+    waUpsertChains.delete(first);
+  }
+  return next;
+}
+
+async function waUpsertConversationInner(phone, patch = {}, lastMsg = null) {
+  const now = new Date().toISOString();
+  const cleanPatch = {
+    topic: str(patch.topic, 80),
+    intent: str(patch.intent, 40),
+    stage: str(patch.stage, 30),
+    updatedAt: now,
+  };
+  Object.keys(cleanPatch).forEach((k) => { if (!cleanPatch[k]) delete cleanPatch[k]; });
+  try {
+    if (db) {
+      const ref = db.collection('wa_conversations').doc(String(phone));
+      const snap = await ref.get();
+      const prev = snap.exists ? snap.data() : { messageCount: 0, lastMessages: [] };
+      const lastMessages = Array.isArray(prev.lastMessages) ? prev.lastMessages.slice(-5) : [];
+      if (lastMsg) lastMessages.push({ from: lastMsg.from === 'agent' ? 'agent' : 'user', text: str(lastMsg.text, 500), at: now });
+      await ref.set({
+        phone: String(phone),
+        messageCount: (Number(prev.messageCount) || 0) + (lastMsg ? 1 : 0),
+        lastMessages: lastMessages.slice(-6),
+        ...cleanPatch,
+      }, { merge: true });
+      return;
+    }
+    let row = memoryStore.wa_conversations.find((x) => x.phone === String(phone));
+    if (!row) {
+      row = { phone: String(phone), messageCount: 0, lastMessages: [], topic: '', intent: '', stage: '' };
+      memoryStore.wa_conversations.unshift(row);
+    }
+    if (lastMsg) {
+      row.messageCount += 1;
+      row.lastMessages = [...row.lastMessages.slice(-5), { from: lastMsg.from === 'agent' ? 'agent' : 'user', text: str(lastMsg.text, 500), at: now }];
+    }
+    Object.assign(row, cleanPatch);
+  } catch {}
+}
+
+// Enveloppe le client d'envoi : chaque message sortant est journalisé + file des morts si échec.
+function trackWaSends(wa, ctx) {
+  const tracked = { ...wa };
+  tracked.sendText = async (to, body) => {
+    const r = await wa.sendText(to, body);
+    waLogEvent({
+      wamid: ctx.wamid, direction: 'out', phone: to, kind: 'text',
+      preview: String(body).slice(0, 300), state: r.ok ? 'SENT' : 'FAILED',
+      metaId: r.id || '', code: r.code != null ? r.code : '', error: r.message || '',
+      deadLetter: !r.ok,
+    });
+    waUpsertConversation(to, {}, { from: 'agent', text: String(body).slice(0, 500) });
+    return r;
+  };
+  tracked.sendChunks = async (to, chunks, pauseMs = 450) => {
+    const results = [];
+    for (const c of chunks) {
+      const r = await tracked.sendText(to, c);
+      results.push(r);
+      if (!r.ok) break;
+      if (pauseMs > 0) await new Promise((r2) => setTimeout(r2, pauseMs));
+    }
+    return results;
+  };
+  return tracked;
+}
+
+async function recordWaStatuses(statuses) {
+  const list = Array.isArray(statuses) ? statuses.slice(0, 20) : [];
+  for (const s of list) {
+    const err = s.errors && s.errors[0];
+    await waLogEvent({
+      wamid: str(s.id, 120), direction: 'status', phone: str(s.recipient_id, 30),
+      kind: 'status', preview: '', state: 'STATUS', status: str(s.status, 20),
+      error: err ? str(err.title || err.message || err.code, 200) : '',
+      code: err && err.code != null ? err.code : '',
+      deadLetter: str(s.status, 20) === 'failed',
+    });
+  }
+}
+
+async function waReadStore() {
+  if (db) {
+    const [convSnap, evSnap] = await Promise.all([
+      db.collection('wa_conversations').orderBy('updatedAt', 'desc').limit(200).get(),
+      db.collection('wa_events').orderBy('createdAt', 'desc').limit(1000).get(),
+    ]);
+    return {
+      store: 'firestore',
+      conversations: convSnap.docs.map((d) => ({ phone: d.id, ...d.data() })),
+      events: evSnap.docs.map((d) => d.data()),
+    };
+  }
+  return {
+    store: 'memory',
+    conversations: memoryStore.wa_conversations,
+    events: memoryStore.wa_events.slice(0, 1000),
+  };
+}
+
+function waComputeStats(conversations, events) {
+  const dayAgo = Date.now() - 24 * 3600 * 1000;
+  const readWamids = new Set();
+  const deliveredWamids = new Set();
+  let failed = 0;
+  let deadLetters = 0;
+  for (const e of events) {
+    if (e.direction === 'status' && e.wamid) {
+      if (e.status === 'read') readWamids.add(e.wamid);
+      if (e.status === 'delivered' || e.status === 'sent') deliveredWamids.add(e.wamid);
+      if (e.status === 'failed') failed += 1;
+    }
+    if (e.direction === 'out' && e.state === 'FAILED') failed += 1;
+    if (e.deadLetter) deadLetters += 1;
+  }
+  return {
+    conversations: conversations.length,
+    active24h: conversations.filter((c) => new Date(c.updatedAt || 0).getTime() > dayAgo).length,
+    delivered: deliveredWamids.size,
+    read: readWamids.size,
+    failed,
+    deadLetters,
+  };
+}
+
+function parseMcpPhoneInfo(raw) {
+  const fallback = { number: '', verifiedName: '', quality: 'UNKNOWN', verification: 'UNKNOWN' };
+  try {
+    const sse = String(raw || '').match(/data:\s*(\{[\s\S]*\})/);
+    const outer = JSON.parse((sse ? sse[1] : String(raw || '{}')).trim());
+    const text = outer.result && outer.result.content && outer.result.content[0] && outer.result.content[0].text;
+    const info = JSON.parse(text || '{}');
+    return {
+      number: String(info.display_phone_number || ''),
+      verifiedName: String(info.verified_name || ''),
+      quality: String(info.quality_rating || 'UNKNOWN'),
+      verification: String(info.code_verification_status || 'UNKNOWN'),
+    };
+  } catch {
+    return fallback;
+  }
+}
+
+// --- Vue d'ensemble WhatsApp pour le dashboard (téléphone + stats + conversations) ---
+app.get(['/api/whatsapp/overview', '/whatsapp/overview'], async (req, res) => {
+  if (!checkRateLimit(req, res, 30)) return;
+  try {
+    const [{ conversations, events, store }, phoneRaw] = await Promise.all([
+      waReadStore(),
+      mcpCallTool({ software: 'Legal Flow', toolName: 'lf_phone_info', args: {} }).catch(() => ''),
+    ]);
+    const phone = parseMcpPhoneInfo(phoneRaw);
+    if (!phone.number) {
+      phone.number = (process.env.WHATSAPP_DISPLAY_NUMBER || '+225 74 52 90 52').trim();
+      phone.verifiedName = phone.verifiedName || 'Dc Knowing';
+    }
+    const activeOnly = String(req.query.active24h || '') === '1';
+    const dayAgo = Date.now() - 24 * 3600 * 1000;
+    const list = conversations.map((c) => ({
+      phone: c.phone,
+      topic: c.topic || '',
+      intent: c.intent || '',
+      stage: c.stage || '',
+      messageCount: Number(c.messageCount) || 0,
+      updatedAt: c.updatedAt || '',
+      lastMessages: Array.isArray(c.lastMessages) ? c.lastMessages : [],
+    })).filter((c) => !activeOnly || new Date(c.updatedAt || 0).getTime() > dayAgo);
+    return res.status(200).json({ ok: true, store, phone, stats: waComputeStats(conversations, events), conversations: list.slice(0, 50) });
+  } catch (e) {
+    return res.status(500).json({ error: 'whatsapp_overview_failed' });
   }
 });
 

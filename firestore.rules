@@ -26,6 +26,13 @@ service cloud.firestore {
     match /integrations/{doc} {
       allow read, write: if false;
     }
+    // Journal WhatsApp DC : écrit par le pipeline backend uniquement.
+    match /wa_conversations/{doc} {
+      allow read, write: if false;
+    }
+    match /wa_events/{doc} {
+      allow read, write: if false;
+    }
     match /{document=**} {
       allow read, write: if false;
     }

@@ -71,6 +71,7 @@ export async function transcribeAudioWithGroq(
   formData.append('model', 'whisper-large-v3-turbo');
   formData.append('temperature', '0');
   formData.append('response_format', 'verbose_json');
+  formData.append('language', 'fr'); // Force French language
 
   try {
     const response = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {

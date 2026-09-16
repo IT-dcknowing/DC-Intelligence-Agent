@@ -82,6 +82,7 @@ export const ConversationDetail: React.FC<ConversationDetailProps> = ({
   const [showAttachNotice, setShowAttachNotice] = useState(false);
   const [exportNotice, setExportNotice] = useState(false);
   const [showAllHistory, setShowAllHistory] = useState(false);
+  const [isSending, setIsSending] = useState(false);
 
   // Audio / Voice recording state
   const [voiceState, setVoiceState] = useState<VoiceState>('idle');
@@ -347,13 +348,24 @@ export const ConversationDetail: React.FC<ConversationDetailProps> = ({
 
   const handleSend = () => {
     if (!inputText.trim() || isGenerating || !conversation) return;
+    setIsSending(true);
     if (onSendMessage) {
-      onSendMessage(conversation.id, inputText.trim());
-    }
-    setInputText('');
-    setIsItalicPreview(false);
-    if (textareaRef.current) {
-      textareaRef.current.style.height = 'auto';
+      onSendMessage(conversation.id, inputText.trim())
+        .then(() => {
+          setInputText('');
+          setIsItalicPreview(false);
+          if (textareaRef.current) {
+            textareaRef.current.style.height = 'auto';
+          }
+        })
+        .finally(() => setIsSending(false));
+    } else {
+      setInputText('');
+      setIsItalicPreview(false);
+      if (textareaRef.current) {
+        textareaRef.current.style.height = 'auto';
+      }
+      setIsSending(false);
     }
   };
 
@@ -824,7 +836,7 @@ export const ConversationDetail: React.FC<ConversationDetailProps> = ({
                   id="chat-send-btn"
                   type="button"
                   onClick={handleSend}
-                  disabled={!inputText.trim() || isGenerating}
+                  disabled={!inputText.trim() || isGenerating || isSending}
                   title="Envoyer le message (Entrée)"
                   className="w-10 h-10 rounded-full bg-black hover:bg-zinc-800 text-white flex items-center justify-center disabled:opacity-40 disabled:cursor-not-allowed active:scale-95 transition-all duration-150 shadow-sm"
                 >

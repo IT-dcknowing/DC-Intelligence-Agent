@@ -127,7 +127,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
         {isOpen && (
           <div
             id="llm-models-dropdown-panel"
-            className="absolute bottom-full mb-2 left-0 w-[320px] bg-white border border-[#E5E5E7] rounded-[12px] shadow-floating z-50 overflow-hidden flex flex-col"
+            className="absolute top-full left-0 w-[320px] bg-white border border-[#E5E5E7] rounded-[12px] shadow-floating z-50 overflow-hidden flex flex-col"
           >
             {/* Dropdown Header */}
             <div className="px-3 py-2 border-b border-[#E5E5E7] bg-[#F7F7F8] flex items-center justify-between">

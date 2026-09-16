@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { Sidebar } from './components/Sidebar';
 import { AssistantView } from './components/AssistantView';
 import { ConnectionsView } from './components/ConnectionsView';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { AgentList } from './components/AgentList';
 import { AgentDetail } from './components/AgentDetail';
 import { KnowledgeBaseView } from './components/KnowledgeBaseView';
@@ -848,14 +849,23 @@ export default function App() {
           />
         )}
 
-        {/* VIEW 2: CONNEXIONS (Colonne centrale=Liste Google Sheets & Docs, Colonne droite=Procédure de connexion) */}
+        {/* VIEW 2: CONNEXIONS — ErrorBoundary évite la page blanche sur TypeError */}
         {currentTab === 'connections' && (
-          <ConnectionsView
-            integrations={integrations}
-            onToggleConnect={handleToggleConnectIntegration}
-            onSyncNow={handleSyncNow}
-            onSetTargetResource={handleSetTargetResource}
-          />
+          <ErrorBoundary
+            fallback={
+              <div className="flex-1 flex flex-col items-center justify-center p-8 text-center bg-white">
+                <h3 className="font-bold text-[15px] text-[#1E293B]">Impossible de charger les connexions</h3>
+                <p className="text-[12px] text-[#64748B] max-w-md mt-1">Réessayez ou vérifiez la configuration Firestore.</p>
+              </div>
+            }
+          >
+            <ConnectionsView
+              integrations={Array.isArray(integrations) ? integrations : []}
+              onToggleConnect={handleToggleConnectIntegration}
+              onSyncNow={handleSyncNow}
+              onSetTargetResource={handleSetTargetResource}
+            />
+          </ErrorBoundary>
         )}
 
         {/* VIEW 3: AGENTS */}

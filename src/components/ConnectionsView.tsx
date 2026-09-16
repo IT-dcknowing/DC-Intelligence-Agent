@@ -29,19 +29,35 @@ interface ConnectionsViewProps {
 }
 
 export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
-  integrations,
+  integrations: integrationsProp,
   onToggleConnect,
   onSyncNow,
   onSetTargetResource,
 }) => {
+  // Valeur par défaut défensive : évite le crash si Firestore/state renvoie undefined/null
+  const integrations: WorkspaceIntegration[] = Array.isArray(integrationsProp) ? integrationsProp : [];
   const [selectedId, setSelectedId] = useState<string>(integrations[0]?.id || 'google-sheets');
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
   const [customResourceDraft, setCustomResourceDraft] = useState<string>('');
   const [isEditingResource, setIsEditingResource] = useState<boolean>(false);
   const [feedbackNotice, setFeedbackNotice] = useState<string | null>(null);
 
-  const selectedIntegration =
+  // Garde-fou : si la liste est vide ou l'id sélectionné n'existe plus, retombe proprement
+  const selectedIntegration: WorkspaceIntegration | undefined =
     integrations.find((i) => i.id === selectedId) || integrations[0];
+
+  // État vide géré au lieu de crasher avec TypeError
+  if (!selectedIntegration || integrations.length === 0) {
+    return (
+      <div className="flex-1 flex flex-col items-center justify-center p-8 text-center bg-white" style={{ fontFamily: "'Inter', sans-serif" }}>
+        <div className="w-12 h-12 rounded-xl bg-[#F4F4F5] border border-[#E5E5E7] flex items-center justify-center mb-3">
+          <Layers className="w-6 h-6 text-[#71717A]" />
+        </div>
+        <h3 className="font-bold text-[15px] text-[#1E293B]">Impossible de charger les connexions</h3>
+        <p className="text-[12px] text-[#64748B] max-w-md mt-1">Aucune intégration disponible. Vérifiez la configuration Firestore ou rechargez la page.</p>
+      </div>
+    );
+  }
 
   const handleConnectClick = () => {
     // OAuth réel : si déconnecté → ouvrir fenêtre Google de consentement
