@@ -40,11 +40,14 @@ import {
 } from './mockData';
 import {
   REAL_DEFAULT_MODELS,
+  DEFAULT_MODEL,
+  DEFAULT_MODEL_ID,
   loadCustomModels,
   saveCustomModels,
   loadSavedApiKeys,
   saveApiKeysToStorage,
   fetchLiveOpenRouterModels,
+  fetchBackendModels,
   generateChatResponse,
 } from './services/llmService';
 import {
@@ -181,8 +184,11 @@ export default function App() {
     return Array.from(map.values());
   });
 
+  // Modèle par défaut du cabinet pré-sélectionné (migre l'ancienne valeur codée en dur).
   const [selectedModelId, setSelectedModelId] = useState<string>(() => {
-    return localStorage.getItem('dc_intelligence_selected_model') || 'deepseek/deepseek-chat';
+    const stored = localStorage.getItem('dc_intelligence_selected_model');
+    if (!stored || stored === 'deepseek/deepseek-chat') return DEFAULT_MODEL_ID;
+    return stored;
   });
 
   const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort>('Medium');
@@ -207,6 +213,50 @@ export default function App() {
       // ignore
     }
   }, [selectedModelId]);
+
+  // Catalogue dynamique au premier démarrage : backend (clé cabinet) en priorité,
+  // sans exiger de clé utilisateur. OpenRouter est marqué "Configuré (cabinet)"
+  // dès que le backend détient la clé — le modèle par défaut reste sélectionné.
+  const catalogLoadedRef = useRef(false);
+  useEffect(() => {
+    if (catalogLoadedRef.current) return;
+    catalogLoadedRef.current = true;
+    (async () => {
+      try {
+        const viaBackend = await fetchBackendModels();
+        if (viaBackend) {
+          if (viaBackend.backendManaged) {
+            setApiKeys((prev) =>
+              prev.map((k) =>
+                k.provider === 'openrouter'
+                  ? { ...k, isConfigured: true, backendManaged: true, lastSaved: 'Clé cabinet (backend)' }
+                  : k
+              )
+            );
+          }
+          if (viaBackend.models.length > 0) {
+            setModels((prev) => {
+              const customModels = prev.filter((m) => m.isCustom);
+              const map = new Map<string, LLMModel>();
+              map.set(DEFAULT_MODEL.id, DEFAULT_MODEL);
+              customModels.forEach((m) => map.set(m.id, m));
+              viaBackend.models.forEach((m) => {
+                if (!map.has(m.id)) map.set(m.id, m);
+              });
+              return Array.from(map.values());
+            });
+            setSelectedModelId((prev) => {
+              try {
+                const stored = localStorage.getItem('dc_intelligence_selected_model');
+                if (stored && stored !== 'deepseek/deepseek-chat') return stored;
+              } catch { /* ignore */ }
+              return DEFAULT_MODEL_ID;
+            });
+          }
+        }
+      } catch { /* repli : modèle par défaut local, déjà en place */ }
+    })();
+  }, []);
 
   // Indicateur d'upload documentaire (désactive la zone d'import pendant l'envoi)
   const [isUploadingDoc, setIsUploadingDoc] = useState<boolean>(false);
@@ -316,7 +366,9 @@ export default function App() {
   // =========================================================================
   // CHAT SESSIONS HANDLERS
   // =========================================================================
-  const handleNewSession = async () => {
+  // Retourne l'id créé : l'assistant peut créer puis envoyer dans la foulée
+  // (sinon l'envoi sans session sortait en silence).
+  const handleNewSession = async (): Promise<string> => {
     const now = new Date();
     const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(
       now.getMinutes()
@@ -338,6 +390,7 @@ export default function App() {
     setChatSessions((prev) => [newSession, ...prev]);
     setSelectedSessionId(newSession.id);
     addToast('success', 'Nouvelle session créée', 'Posez votre question ou dictez votre facture.');
+    return newSession.id;
   };
 
   const handleDeleteSession = (sessionId: string) => {
@@ -439,7 +492,15 @@ export default function App() {
 
     try {
       const history = targetSession ? targetSession.messages : [];
-      const modelObj = models.find((m) => m.id === selectedModelId) || models[0];
+      // Garde-fou : jamais d'appel avec un modèle indéfini (TypeError silencieux avant).
+      const modelObj = models.find((m) => m.id === selectedModelId) || models[0] || DEFAULT_MODEL;
+      if (!modelObj) {
+        addToast('error', 'Aucun modèle disponible', 'Le catalogue est vide et le modèle par défaut est introuvable. Rechargez la page.');
+        setChatSessions((prev) =>
+          prev.map((s) => (s.id === sessionId ? { ...s, messages: s.messages.filter((m) => m.id !== userMsg.id) } : s))
+        );
+        return;
+      }
 
       const activeAgent = agents.find((a) => a.id === selectedAgentId) || agents[0];
 
@@ -547,7 +608,15 @@ export default function App() {
       );
     } catch (err: any) {
       console.error('LLM Inference Error:', err);
-      addToast('error', 'Erreur d’inférence IA', err.message || 'Échec de la réponse du modèle.');
+      // Message clair au lieu d'un silence : distingue l'indisponibilité
+      // backend (clé cabinet) des erreurs réseau/timeout.
+      const raw = String(err?.message || '');
+      const friendly = /backend_not_configured|AUCUNE_CLÉ_API|OPENROUTER_API_KEY/.test(raw)
+        ? 'Service IA indisponible : clé cabinet manquante côté serveur. Contactez l’administrateur.'
+        : /timeout|délai|Failed to fetch|NetworkError|unreachable/i.test(raw)
+        ? 'Le service IA met trop de temps à répondre. Réessayez dans un instant.'
+        : (raw || 'Échec de la réponse du modèle.');
+      addToast('error', 'Erreur d’inférence IA', friendly);
     } finally {
       setIsGenerating(false);
     }

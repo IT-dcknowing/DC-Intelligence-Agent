@@ -214,7 +214,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               {apiKeys.filter((config) => config.provider !== 'groq').map((config) => {
                 const provider = config.provider;
                 const isSaved = savedFeedback[provider];
-                const isConfigured = Boolean(config.key && config.key.trim().length > 0);
+                // Clé cabinet backend : configuré sans saisie utilisateur.
+                const isConfigured = Boolean(config.backendManaged || (config.key && config.key.trim().length > 0));
                 const currentDraft = keyDrafts[provider];
                 const isRevealed = showKey[provider];
 
@@ -251,7 +252,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                           <span
                             style={{ width: 5, height: 5, borderRadius: '50%', background: isConfigured ? '#71717A' : '#D4D4D8', display: 'inline-block' }}
                           />
-                          <span>{isConfigured ? 'Configuré' : 'Vide'}</span>
+                          <span>{isConfigured ? (config.backendManaged ? 'Configuré — cabinet' : 'Configuré') : 'Vide'}</span>
                         </span>
                       </div>
 
@@ -422,10 +423,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 </div>
                 <div>
                   <h4 className="font-bold text-[15px] text-[#1E293B]">
-                    Aucune clé API enregistrée pour le catalogue dynamique
+                    Catalogue en cours de chargement
                   </h4>
                   <p className="text-[12px] text-[#64748B] max-w-md mx-auto mt-1 leading-relaxed">
-                    Pour afficher la liste dynamique des modèles disponibles sur OpenRouter ou un autre fournisseur, veuillez ajouter et enregistrer votre clé API dans l'onglet <strong>"Clés API"</strong>.
+                    Le catalogue se charge automatiquement via la clé cabinet (backend). Si rien ne s'affiche, vérifiez la connexion puis cliquez sur <strong>"Actualiser catalogue"</strong> — le modèle par défaut reste utilisable sans configuration.
                   </p>
                 </div>
               </div>

@@ -147,7 +147,7 @@ function requireAdmin(req, res) {
 async function storeDoc(collection, data) {
   const entry = { ...data, createdAt: new Date().toISOString() };
   if (db) {
-    const ref = await db.collection(collection).add(entry);
+    const ref = await withDb(db.collection(collection).add(entry), 'storeDoc:' + collection);
     return { id: ref.id, ...entry, persisted: 'firestore' };
   }
   const id = `${collection.slice(0, 3).toUpperCase()}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
@@ -159,7 +159,7 @@ async function storeDoc(collection, data) {
 async function listDocs(collection, limit) {
   const n = Math.min(Math.max(parseInt(String(limit || '20'), 10) || 20, 1), 100);
   if (db) {
-    const snap = await db.collection(collection).orderBy('createdAt', 'desc').limit(n).get();
+    const snap = await withDb(db.collection(collection).orderBy('createdAt', 'desc').limit(n).get(), 'listDocs:' + collection);
     return snap.docs.map((d) => ({ id: d.id, ...d.data(), persisted: 'firestore' }));
   }
   const arr = collection === 'dc_audit' ? memoryStore.audit : memoryStore.tasks;
@@ -173,6 +173,37 @@ function withTimeout(promise, ms, code) {
     timer = setTimeout(() => reject(new Error(code || 'timeout')), ms);
   });
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
+// Tip fiabilité #10 — timeout Firestore : 8 s max, jamais de hang, échec loggé.
+const DB_TIMEOUT_MS = 8000;
+function withDb(promise, op) {
+  return withTimeout(promise, DB_TIMEOUT_MS, `db_timeout:${op}`).catch((e) => {
+    console.warn('[DB] ' + op + ' ' + String((e && e.message) || e).slice(0, 150));
+    throw e;
+  });
+}
+
+// Tip fiabilité #10 — retry UNIQUE sur 429/5xx, lectures seules.
+// Jamais sur les envois WhatsApp (risque de doublon) : sendText/sendChunks passent retry:false.
+async function fetchUpstream(url, options, label) {
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  for (let attempt = 0; attempt < 2; attempt++) {
+    let res;
+    try {
+      res = await fetch(url, options);
+    } catch (e) {
+      if (attempt === 0) { await wait(800); continue; }
+      throw e;
+    }
+    if ((res.status === 429 || res.status >= 500) && attempt === 0) {
+      const ra = parseInt((res.headers && res.headers.get('retry-after')) || '0', 10);
+      await wait(Math.min(Number.isFinite(ra) && ra > 0 ? ra * 1000 : 800, 5000));
+      continue;
+    }
+    return res;
+  }
+  throw new Error((label || 'upstream') + '_unreachable');
 }
 
 async function openRouterChat({ model, messages, temperature, maxTokens, title }) {
@@ -197,7 +228,7 @@ async function openRouterChat({ model, messages, temperature, maxTokens, title }
     max_tokens: maxTokens || 1500,
   };
   if (/r1|reasoner|thinking/i.test(model)) body.reasoning = { effort: 'medium' };
-  const r = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+  const r = await fetchUpstream('https://openrouter.ai/api/v1/chat/completions', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -206,7 +237,7 @@ async function openRouterChat({ model, messages, temperature, maxTokens, title }
       'X-Title': title || 'DC Intelligence',
     },
     body: JSON.stringify(body),
-  });
+  }, 'openrouter');
   const data = await r.json().catch(() => ({}));
   if (!r.ok) {
     const e = new Error(`openrouter_${r.status}: ${String((data && data.error && data.error.message) || r.statusText).slice(0, 400)}`);
@@ -235,17 +266,17 @@ async function mcpCallTool({ software, toolName, args }) {
   const headers = { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' };
   if (mcpToken) headers.Authorization = `Bearer ${mcpToken}`;
   const payload = (id, method, params) => ({ jsonrpc: '2.0', id, method, params });
-  const init = await fetch(target, {
+  const init = await fetchUpstream(target, {
     method: 'POST',
     headers,
     body: JSON.stringify(payload(1, 'initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'dc-intelligence', version: '0.3.0' } })),
-  });
+  }, 'mcp');
   if (init.status === 401) throw Object.assign(new Error('mcp_unauthorized: MCP_TOKEN invalide ou manquant'), { status: 502 });
-  const call = await fetch(target, {
+  const call = await fetchUpstream(target, {
     method: 'POST',
     headers,
     body: JSON.stringify(payload(2, 'tools/call', { name: toolName, arguments: args || {} })),
-  });
+  }, 'mcp');
   const text = await call.text();
   if (!call.ok) throw Object.assign(new Error(`mcp_${call.status}: ${text.slice(0, 300)}`), { status: 502 });
   return text.slice(0, 12000);
@@ -262,11 +293,11 @@ async function transcribeAudioBuffer(buf, mime) {
   form.append('model', (process.env.WHISPER_MODEL || 'whisper-large-v3-turbo').trim());
   form.append('temperature', '0');
   form.append('response_format', 'verbose_json');
-  const r = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
+  const r = await fetchUpstream('https://api.groq.com/openai/v1/audio/transcriptions', {
     method: 'POST',
     headers: { Authorization: `Bearer ${groqKey}` },
     body: form,
-  });
+  }, 'groq');
   const data = await r.json().catch(() => ({}));
   if (!r.ok) throw Object.assign(new Error(`groq_${r.status}: ${String((data && data.error && data.error.message) || r.statusText).slice(0, 300)}`), { status: r.status });
   return { text: String(data.text || ''), duration: data.duration };
@@ -429,6 +460,7 @@ async function handleInboundMessage(wa, { wamid, from, type, msg }) {
   const hasMedia = ['image', 'document', 'audio', 'video', 'sticker'].includes(type);
   waLogEvent({ wamid, direction: 'in', phone: from, kind: type, preview: (textBody || `[${type}]`).slice(0, 300), state: 'RECEIVED' });
   waUpsertConversation(from, { stage: 'RECEIVED' }, { from: 'user', text: (textBody || `[${type}]`).slice(0, 500) });
+  console.log(`[WA STEP] wamid=${wamid} étape=réception phone=${from} type=${type} len=${textBody.length}`);
   try { await withTimeout(wa.sendRead(wamid), 4000, 'read_timeout'); } catch (e) {
     console.warn('[WA] read échoué', String((e && e.message) || e).slice(0, 150));
   }
@@ -442,6 +474,21 @@ async function handleInboundMessage(wa, { wamid, from, type, msg }) {
     waUpsertConversation(from, { stage: 'COMPLETED', intent: 'ACCUEIL' });
     return { state: conv.state };
   }
+
+  // Tip 6a — acronyme seul ("IMF", "TVA?") : ambigu, on désambiguïse au lieu d'inventer.
+  if (!hasMedia && textBody && /^[A-ZÀ-Þ0-9]{2,6}[?.!…\s]*$/.test(textBody.trim()) && textBody.trim().length <= 8) {
+    const code = textBody.trim().replace(/[?.!…\s]+$/g, '');
+    console.log(`[WA STEP] wamid=${wamid} étape=désambiguïsation acronyme=${code}`);
+    waConv.transition(conv, waConv.STATES.WAITING_USER);
+    await wa.sendText(from, `Humm, « ${code} » peut vouloir dire plusieurs choses. Précisez en une phrase ce que vous cherchez (ou envoyez-moi le document), et je vérifie.`);
+    waConv.transition(conv, waConv.STATES.COMPLETED);
+    waUpsertConversation(from, { stage: 'WAITING_USER', intent: 'CLARIFICATION' });
+    return { state: conv.state };
+  }
+
+  // Tip 6b — correction ("non, je parlais de…") : accusé + reprise du contexte dossier.
+  const isCorrection = /^(non|nan|pas du tout|je me suis tromp)/i.test(textBody.trim());
+  if (isCorrection) console.log(`[WA STEP] wamid=${wamid} étape=correction_détectée`);
 
   // PRÉSENCE 1 — RÉEL : la classification commence maintenant.
   waConv.transition(conv, waConv.STATES.PROCESSING);
@@ -466,7 +513,7 @@ async function handleInboundMessage(wa, { wamid, from, type, msg }) {
       docType = v.documentType; extractedText = v.extractedText; entities = v.entities || {}; confidence = v.confidence;
     } else if (extractedText) {
       const reply = await withTimeout(openRouterChat({
-        model: 'inclusionai/ling-3.0-flash-fin:free',
+        model: 'inclusionai/ling-3.0-flash-vl:free',
         messages: [
           { role: 'system', content: 'Classifie en UN mot : invoice | tax_notice | bank_statement | legal_contract | general_query. Réponds uniquement JSON {"documentType":"...","confidence":0..1}.' },
           { role: 'user', content: extractedText.slice(0, 2000) },
@@ -480,6 +527,7 @@ async function handleInboundMessage(wa, { wamid, from, type, msg }) {
   } catch (e) {
     console.warn('[WA] classification repli heuristique', String((e && e.message) || e).slice(0, 150));
   }
+  console.log(`[WA STEP] wamid=${wamid} étape=classification docType=${docType} confiance=${confidence}`);
 
   if (!extractedText && !hasMedia) {
     waConv.transition(conv, waConv.STATES.WAITING_USER);
@@ -497,6 +545,7 @@ async function handleInboundMessage(wa, { wamid, from, type, msg }) {
   else if (docType === 'bank_statement') { route.domain = 'RAPPROCHEMENT'; route.agent = 'reco'; }
   const TOPIC_LABEL = { invoice: 'Facture / pièce', tax_notice: 'Avis fiscal', bank_statement: 'Relevé bancaire', legal_contract: 'Document juridique', general_query: 'Question' };
   waUpsertConversation(from, { stage: 'ROUTING', topic: TOPIC_LABEL[docType] || 'Question', intent: route.domain });
+  console.log(`[WA STEP] wamid=${wamid} étape=routage domaine=${route.domain} agent=${route.agent}`);
 
   await refreshTypingIfSlow();
 
@@ -520,6 +569,7 @@ async function handleInboundMessage(wa, { wamid, from, type, msg }) {
   } catch (e) {
     console.warn('[WA] identité indisponible, suite en mode générique', String((e && e.message) || e).slice(0, 150));
   }
+  console.log(`[WA STEP] wamid=${wamid} étape=identité entreprise=${companyLabel || 'non_identifiée'}`);
 
   // PRÉSENCE 2 — RÉEL : on lance VRAIMENT l'agent / les outils maintenant.
   waConv.transition(conv, waConv.STATES.AGENT_WORKING);
@@ -553,30 +603,74 @@ async function handleInboundMessage(wa, { wamid, from, type, msg }) {
   }
   await refreshTypingIfSlow();
 
+  // Tip 5 — état conversationnel injecté : le LLM voit le dossier
+  // (topic/intent/nb échanges/derniers tours) au lieu de répondre hors contexte.
+  let dossierContext = '';
+  try {
+    const dossier = await waReadConversation(from);
+    if (dossier) {
+      const hist = Array.isArray(dossier.lastMessages) ? dossier.lastMessages.slice(-4) : [];
+      const histTxt = hist
+        .map((m) => `[${m.from === 'agent' ? 'agent' : 'client'}: ${String(m.text || '').slice(0, 300)}]`)
+        .join(' ');
+      dossierContext =
+        `Dossier: topic=${dossier.topic || '—'}, intent=${dossier.intent || '—'}, ` +
+        `échanges=${dossier.messageCount || 0}. Derniers tours: ${histTxt || 'aucun'}.`;
+      console.log(`[WA STEP] wamid=${wamid} étape=contexte_dossier tours=${hist.length}`);
+    }
+  } catch {
+    // dossier indisponible : la composition continue sans historique
+  }
+
+  // Accusé de correction (tip 6b) : le client sait que sa rectification est prise en compte.
+  if (isCorrection) {
+    try { await wa.sendText(from, 'Bien noté, je reprends avec votre correction.'); } catch {}
+  }
+
   // Composition du RÉSULTAT (seul message « utile », après les présences).
+  // Même modèle par défaut que le chat interne pour tous les agents.
   // Free-tier fluctuant : en cas d'échec/timeout du modèle principal, un 2e
   // modèle gratuit prend le relais avant le message d'excuse.
-  const primaryModel = route.agent === 'accueil' ? 'nex-agi/nex-n2.5-mini:free' : 'inclusionai/ling-3.0-flash-fin:free';
-  const fallbackModel = primaryModel === 'nex-agi/nex-n2.5-mini:free' ? 'inclusionai/ling-3.0-flash-fin:free' : 'nex-agi/nex-n2.5-mini:free';
+  const primaryModel = 'inclusionai/ling-3.0-flash-vl:free';
+  const fallbackModel = 'nex-agi/nex-n2.5-mini:free';
+  const correctionNote = isCorrection
+    ? ' Correction du client : annule et remplace sa demande précédente, reprends l’historique ci-dessus.'
+    : '';
   const composeMessages = [
-    { role: 'system', content: `${waConv.PERSONA_SYSTEM} Contexte dossier : entreprise=${companyLabel || 'non identifiée'}, domaine=${route.domain}. Données outils : ${toolContext.slice(0, 4000) || 'aucune'}. Si les données sont insuffisantes, dis ce qu’il te manque au lieu d’inventer.` },
-    { role: 'user', content: `Message client (${docType}, confiance ${confidence}) : ${extractedText.slice(0, 2500)}${entities && entities.amount ? ` [montant détecté : ${entities.amount}]` : ''}` },
+    { role: 'system', content: `${waConv.PERSONA_SYSTEM} Contexte dossier : entreprise=${companyLabel || 'non identifiée'}, domaine=${route.domain}. ${dossierContext || 'Premier contact.'}${correctionNote} Données outils : ${toolContext.slice(0, 4000) || 'aucune'}. Si les données sont insuffisantes, dis ce qu’il te manque au lieu d’inventer.` },
+    { role: 'user', content: `${isCorrection ? 'CORRECTION (remplace ma demande précédente) — ' : ''}Message client (${docType}, confiance ${confidence}) : ${extractedText.slice(0, 2500)}${entities && entities.amount ? ` [montant détecté : ${entities.amount}]` : ''}` },
   ];
+  // Fallback d'attente : si la composition dépasse 10 s, on prévient le client
+  // au lieu de le laisser sans nouvelles (puis on complète dès que c'est prêt).
   let answer = '';
+  let composeDone = false;
+  const waitTimer = setTimeout(async () => {
+    if (!composeDone) {
+      try { await say(waConv.PRESENCE.oneMoreCheck); } catch {}
+    }
+  }, 10000);
+  console.log(`[WA STEP] wamid=${wamid} étape=composition modèle=${primaryModel}`);
   try {
     try {
       answer = await withTimeout(openRouterChat({
         model: primaryModel, messages: composeMessages, temperature: 0.4, maxTokens: 700,
-      }), 22000, 'compose_timeout');
+      }), 16000, 'compose_timeout');
+      console.log(`[WA STEP] wamid=${wamid} étape=composition_ok modèle=${primaryModel} len=${answer.length}`);
     } catch (e1) {
       console.warn('[WA] composition repli 2e modèle', String((e1 && e1.message) || e1).slice(0, 150));
       await say(waConv.PRESENCE.oneMoreCheck); // RÉEL : on relance vraiment une composition
       answer = await withTimeout(openRouterChat({
         model: fallbackModel, messages: composeMessages, temperature: 0.4, maxTokens: 700,
-      }), 22000, 'compose_timeout2');
+      }), 16000, 'compose_timeout2');
+      console.log(`[WA STEP] wamid=${wamid} étape=composition_ok modèle=${fallbackModel} len=${answer.length}`);
     }
+    composeDone = true;
+    clearTimeout(waitTimer);
   } catch (e) {
+    composeDone = true;
+    clearTimeout(waitTimer);
     console.warn('[WA] composition LLM échouée', String((e && e.message) || e).slice(0, 150));
+    console.log(`[WA STEP] wamid=${wamid} étape=composition_échec statut_final=ESCALATED`);
     waConv.transition(conv, waConv.STATES.FAILED);
     await wa.sendText(from, 'Humm, je n’arrive pas à finaliser la vérification pour le moment. Je transmets à un expert qui reviendra vers vous.');
     waConv.transition(conv, waConv.STATES.ESCALATED);
@@ -589,12 +683,15 @@ async function handleInboundMessage(wa, { wamid, from, type, msg }) {
   await say(waConv.PRESENCE.resultReady);
   waConv.transition(conv, waConv.STATES.RESPONDING);
   const chunks = waConv.splitResult(answer);
+  console.log(`[WA STEP] wamid=${wamid} étape=envoi chunks=${chunks.length}`);
   const results = await wa.sendChunks(from, chunks);
+  const sent = results.filter((r) => r.ok).length;
   if (results.some((r) => !r.ok && r.code === 131047)) {
     console.warn('[WA] fenêtre 24 h fermée, templates non gérés (cf dossier MCP §7).');
   }
   waConv.transition(conv, waConv.STATES.COMPLETED);
   waUpsertConversation(from, { stage: 'COMPLETED' });
+  console.log(`[WA STEP] wamid=${wamid} étape=statut_final envoyés=${sent}/${chunks.length} état=${conv.state}`);
 
   // Traçabilité (fire-and-forget).
   try {
@@ -607,6 +704,41 @@ async function handleInboundMessage(wa, { wamid, from, type, msg }) {
   } catch {}
   return { state: conv.state };
 }
+
+// --- Catalogue modèles via clé cabinet (le front n'a jamais la clé) ---
+// GET /api/models -> { models: [{id,name,provider,isFree,description}], backendManaged: bool }.
+// L'endpoint OpenRouter /models est public : sans clé serveur on renvoie quand même
+// la liste (backendManaged:false) pour que le sélecteur ne reste jamais vide.
+app.get(['/api/models', '/models'], async (req, res) => {
+  if (!checkRateLimit(req, res, 30)) return;
+  const apiKey = (process.env.OPENROUTER_API_KEY || '').trim();
+  try {
+    const headers = { 'HTTP-Referer': process.env.APP_URL || 'https://dcintelligenceio.web.app', 'X-Title': 'DC Intelligence' };
+    if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
+    const r = await fetch('https://openrouter.ai/api/v1/models', { method: 'GET', headers });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw Object.assign(new Error(`openrouter_${r.status}`), { status: 502 });
+    const list = Array.isArray(data.data) ? data.data : [];
+    const models = list.slice(0, 300).map((item) => {
+      const promptPrice = item.pricing && item.pricing.prompt ? parseFloat(item.pricing.prompt) : 0;
+      const completionPrice = item.pricing && item.pricing.completion ? parseFloat(item.pricing.completion) : 0;
+      const isFree = (promptPrice === 0 && completionPrice === 0) || String(item.id || '').endsWith(':free');
+      let provider = 'openrouter';
+      if (String(item.id || '').startsWith('anthropic/')) provider = 'anthropic';
+      else if (String(item.id || '').startsWith('deepseek/')) provider = 'deepseek';
+      return {
+        id: String(item.id),
+        name: String(item.name || item.id),
+        provider,
+        isFree,
+        description: String((item.description || 'Modèle OpenRouter vérifié')).slice(0, 160),
+      };
+    });
+    return res.status(200).json({ ok: true, backendManaged: Boolean(apiKey), models });
+  } catch (e) {
+    return res.status(502).json({ error: 'models_unreachable', detail: String((e && e.message) || e).slice(0, 200) });
+  }
+});
 
 // --- Proxy LLM sécurisé : le front appelle /api/chat, la clé reste côté serveur ---
 // Supporte /api/chat (prod Firebase) et /chat (dev via vite proxy rewrite).
@@ -844,6 +976,21 @@ function waUpsertConversation(phone, patch = {}, lastMsg = null) {
   return next;
 }
 
+// Tip 5 — lecture dossier (topic/intent/derniers tours) pour injection dans la
+// composition. Fail-soft : null si Firestore lent/indisponible (borné 8 s via withDb).
+async function waReadConversation(phone) {
+  try {
+    if (db) {
+      const snap = await withDb(db.collection('wa_conversations').doc(String(phone)).get(), 'waConv:read');
+      if (snap.exists) return snap.data();
+      return null;
+    }
+    return memoryStore.wa_conversations.find((x) => x.phone === String(phone)) || null;
+  } catch {
+    return null;
+  }
+}
+
 async function waUpsertConversationInner(phone, patch = {}, lastMsg = null) {
   const now = new Date().toISOString();
   const cleanPatch = {
@@ -856,17 +1003,16 @@ async function waUpsertConversationInner(phone, patch = {}, lastMsg = null) {
   try {
     if (db) {
       const ref = db.collection('wa_conversations').doc(String(phone));
-      const snap = await ref.get();
+      const snap = await withDb(ref.get(), 'waConv:get');
       const prev = snap.exists ? snap.data() : { messageCount: 0, lastMessages: [] };
       const lastMessages = Array.isArray(prev.lastMessages) ? prev.lastMessages.slice(-5) : [];
       if (lastMsg) lastMessages.push({ from: lastMsg.from === 'agent' ? 'agent' : 'user', text: str(lastMsg.text, 500), at: now });
-      await ref.set({
+      await withDb(ref.set({
         phone: String(phone),
         messageCount: (Number(prev.messageCount) || 0) + (lastMsg ? 1 : 0),
         lastMessages: lastMessages.slice(-6),
         ...cleanPatch,
-      }, { merge: true });
-      return;
+      }, { merge: true }), 'waConv:set');
     }
     let row = memoryStore.wa_conversations.find((x) => x.phone === String(phone));
     if (!row) {
@@ -924,10 +1070,10 @@ async function recordWaStatuses(statuses) {
 
 async function waReadStore() {
   if (db) {
-    const [convSnap, evSnap] = await Promise.all([
+    const [convSnap, evSnap] = await withDb(Promise.all([
       db.collection('wa_conversations').orderBy('updatedAt', 'desc').limit(200).get(),
       db.collection('wa_events').orderBy('createdAt', 'desc').limit(1000).get(),
-    ]);
+    ]), 'waReadStore');
     return {
       store: 'firestore',
       conversations: convSnap.docs.map((d) => ({ phone: d.id, ...d.data() })),
@@ -1548,3 +1694,6 @@ app.all(['/api/*', '/webhook/*'], (req, res) => {
 });
 
 exports.whatsappWebhook = functions.https.onRequest(app);
+
+// Exportés pour tests locaux uniquement (aucun effet en prod).
+exports.__testUtils = { withTimeout, withDb, fetchUpstream };

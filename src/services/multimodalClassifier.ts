@@ -164,7 +164,7 @@ async function tryBackendTextClassification(content: string): Promise<Multimodal
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: 'inclusionai/ling-3.0-flash-fin:free',
+        model: 'inclusionai/ling-3.0-flash-vl:free',
         messages: [
           {
             role: 'system',

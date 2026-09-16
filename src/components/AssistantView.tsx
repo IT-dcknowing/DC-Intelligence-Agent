@@ -20,6 +20,7 @@ import {
   HelpCircle,
   Calculator,
   BookOpen,
+  Loader2,
 } from 'lucide-react';
 import {
   ApiKeyConfig,
@@ -37,7 +38,7 @@ interface AssistantViewProps {
   sessions: ChatSession[];
   selectedSessionId: string | null;
   onSelectSession: (sessionId: string) => void;
-  onNewSession: () => void;
+  onNewSession: () => Promise<string>;
   onDeleteSession: (sessionId: string) => void;
   onRenameSession: (sessionId: string, newTitle: string) => void;
   onSendMessage: (sessionId: string, text: string) => void;
@@ -218,15 +219,25 @@ export const AssistantView: React.FC<AssistantViewProps> = ({
     audioChunksRef.current = [];
   };
 
-  const handleSubmitMessage = (e?: React.FormEvent) => {
+  // Envoi robuste : si aucune session n'existe (démarrage à zéro),
+  // on la crée d'abord au lieu de sortir en silence.
+  const handleSubmitMessage = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    if (!inputText.trim() || isGenerating || !activeSession) return;
+    if (!inputText.trim() || isGenerating) return;
+    let sessionId = activeSession?.id;
+    if (!sessionId) {
+      try {
+        sessionId = await onNewSession();
+      } catch {
+        return;
+      }
+    }
     const textToSend = inputText.trim();
     setInputText('');
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto';
     }
-    onSendMessage(activeSession.id, textToSend);
+    onSendMessage(sessionId, textToSend);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -908,14 +919,19 @@ export const AssistantView: React.FC<AssistantViewProps> = ({
                     type="button"
                     onClick={() => handleSubmitMessage()}
                     disabled={!inputText.trim() || isGenerating}
-                    title="Envoyer le message (Entrée)"
+                    title={isGenerating ? 'Génération en cours…' : 'Envoyer le message (Entrée)'}
+                    aria-busy={isGenerating}
                     className={`p-2 rounded-xl transition-all ${
                       inputText.trim() && !isGenerating
                         ? 'bg-black text-white hover:bg-zinc-800 shadow-xs cursor-pointer active:scale-95'
                         : 'bg-zinc-100 text-zinc-400 cursor-not-allowed'
                     }`}
                   >
-                    <ArrowUp className="w-4 h-4 stroke-[2.5]" />
+                    {isGenerating ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <ArrowUp className="w-4 h-4 stroke-[2.5]" />
+                    )}
                   </button>
                 </div>
               </div>

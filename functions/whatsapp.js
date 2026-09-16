@@ -135,7 +135,9 @@ function splitResult(text, maxLen = 900) {
 }
 
 function isGreetingOnly(text) {
-  return /^(bonjour|bonsoir|salut|hello|bjr|cc|coucou|bonjour\s+dc|salut\s+dc)[\s!.…]*$/i.test((text || '').trim());
+  // Salutation SEULE (aucune question derrière) -> réponse immédiate sans pipeline.
+  // Inclut les variantes courtes FR/EN ("Hey", "hi", "yo") qui partaient à tort en pipeline complet.
+  return /^(bonjour|bonsoir|salut|hello|hi|hey|yo|yop|bjr|cc|coucou|bonjour\s+dc|salut\s+dc|hello\s+dc|hey\s+dc)[\s!.…]*$/i.test((text || '').trim());
 }
 
 // Routeur local (miroir allégé du routerAgent front) — classification rapide avant LLM/outils.
@@ -154,12 +156,41 @@ function routeText(text) {
 }
 
 // --- Client WhatsApp Cloud API ---
+// Retry unique 429/5xx, lectures seules (media, read receipts). Jamais les envois.
+async function fetchUpstream(url, options, label) {
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  for (let attempt = 0; attempt < 2; attempt++) {
+    let res;
+    try {
+      res = await fetch(url, options);
+    } catch (e) {
+      if (attempt === 0) { await wait(800); continue; }
+      throw e;
+    }
+    if ((res.status === 429 || res.status >= 500) && attempt === 0) {
+      const ra = parseInt((res.headers && res.headers.get('retry-after')) || '0', 10);
+      await wait(Math.min(Number.isFinite(ra) && ra > 0 ? ra * 1000 : 800, 5000));
+      continue;
+    }
+    return res;
+  }
+  throw new Error((label || 'upstream') + '_unreachable');
+}
+
 function createWhatsAppClient({ apiVersion, phoneNumberId, accessToken }) {
   const base = `${GRAPH_BASE}/${apiVersion || 'v26.0'}/${phoneNumberId}/messages`;
   const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` };
 
-  async function graphPost(body) {
-    const r = await fetch(base, { method: 'POST', headers, body: JSON.stringify(body) });
+  // Retry unique 429/5xx, lectures seules. opts.retry=false pour les ENVOIS
+  // (un retry d'envoi = risque de doublon, l'idempotence wamid ne couvre que l'inbound).
+  async function graphPost(body, opts) {
+    const doPost = () => fetch(base, { method: 'POST', headers, body: JSON.stringify(body) });
+    let r;
+    if (opts && opts.retry === false) {
+      r = await doPost();
+    } else {
+      r = await fetchUpstream(base, { method: 'POST', headers, body: JSON.stringify(body) }, 'meta');
+    }
     const data = await r.json().catch(() => ({}));
     return { ok: r.ok, status: r.status, data };
   }
@@ -194,7 +225,7 @@ function createWhatsAppClient({ apiVersion, phoneNumberId, accessToken }) {
       to,
       type: 'text',
       text: { body: text, preview_url: false },
-    });
+    }, { retry: false });
     if (res.ok) {
       const id = res.data && res.data.messages && res.data.messages[0] && res.data.messages[0].id;
       return { ok: true, id };
@@ -215,9 +246,9 @@ function createWhatsAppClient({ apiVersion, phoneNumberId, accessToken }) {
   }
 
   async function getMediaUrl(mediaId) {
-    const r = await fetch(`${GRAPH_BASE}/${apiVersion || 'v26.0'}/${mediaId}`, {
+    const r = await fetchUpstream(`${GRAPH_BASE}/${apiVersion || 'v26.0'}/${mediaId}`, {
       headers: { Authorization: `Bearer ${accessToken}` },
-    });
+    }, 'meta');
     const data = await r.json().catch(() => ({}));
     if (!r.ok || !data.url) throw new Error(`media_url_${r.status}`);
     return { url: data.url, mimeType: data.mime_type, size: data.file_size };
@@ -225,7 +256,7 @@ function createWhatsAppClient({ apiVersion, phoneNumberId, accessToken }) {
 
   async function downloadMedia(mediaId, maxBytes = 10_000_000) {
     const { url } = await getMediaUrl(mediaId);
-    const r = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+    const r = await fetchUpstream(url, { headers: { Authorization: `Bearer ${accessToken}` } }, 'meta');
     if (!r.ok) throw new Error(`media_dl_${r.status}`);
     const buf = Buffer.from(await r.arrayBuffer());
     if (buf.length === 0 || buf.length > maxBytes) throw new Error('media_trop_volumineux');

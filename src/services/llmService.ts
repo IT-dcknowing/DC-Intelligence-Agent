@@ -2,10 +2,24 @@ import { ApiKeyConfig, ChatMessage, LLMModel, LLMProvider, ReasoningEffort } fro
 import { apiUrl, ENV_ANTHROPIC_KEY, ENV_DEEPSEEK_KEY, ENV_GROQ_KEY, ENV_OPENROUTER_KEY } from '../config/env';
 
 /**
- * Catalogue par défaut : Vider les modèles statiques en dur.
- * La liste est chargée dynamiquement via l'API OpenRouter dès qu'une clé API est enregistrée.
+ * Modèle par défaut du cabinet : actif immédiatement, sans clé utilisateur.
+ * La clé OpenRouter vit côté backend (OPENROUTER_API_KEY), le front passe par /api/chat et /api/models.
  */
-export const REAL_DEFAULT_MODELS: LLMModel[] = [];
+export const DEFAULT_MODEL_ID = 'inclusionai/ling-3.0-flash-vl:free';
+
+export const DEFAULT_MODEL: LLMModel = {
+  id: DEFAULT_MODEL_ID,
+  name: 'Ling 3.0 Flash VL',
+  provider: 'openrouter',
+  isFree: true,
+  description: 'Modèle par défaut du cabinet (vision + texte) — actif sans configuration.',
+};
+
+/**
+ * Catalogue par défaut : le modèle cabinet est toujours présent en premier.
+ * Le reste est complété dynamiquement via le backend (/api/models, clé serveur).
+ */
+export const REAL_DEFAULT_MODELS: LLMModel[] = [DEFAULT_MODEL];
 
 const CUSTOM_MODELS_STORAGE_KEY = 'compta_flow_custom_models';
 const API_KEYS_STORAGE_KEY = 'compta_flow_api_keys';
@@ -98,13 +112,23 @@ export function saveApiKeysToStorage(apiKeys: ApiKeyConfig[]): void {
   }
 }
 
+export interface LiveModelsResult {
+  models: LLMModel[];
+  // True quand le backend détient la clé cabinet : OpenRouter utilisable sans clé locale.
+  backendManaged: boolean;
+}
+
 /**
- * Fetch real live models from OpenRouter public API
+ * Fetch live models : backend /api/models en priorité (clé serveur, sans clé user),
+ * puis appel direct OpenRouter si une clé locale est fournie (dev/fallback).
  */
 export async function fetchLiveOpenRouterModels(apiKey?: string): Promise<LLMModel[]> {
+  const viaBackend = await fetchBackendModels().catch(() => null);
+  if (viaBackend && viaBackend.models.length > 0) return viaBackend.models;
+
   if (!apiKey || !apiKey.trim()) {
-    // Si aucune clé n'est enregistrée -> la liste reste vide (pas de mock en fallback)
-    return [];
+    // Ni backend ni clé locale -> on garde au minimum le modèle par défaut.
+    return [DEFAULT_MODEL];
   }
 
   const headers: Record<string, string> = {
@@ -146,6 +170,29 @@ export async function fetchLiveOpenRouterModels(apiKey?: string): Promise<LLMMod
       description: item.description?.slice(0, 120) || 'Modèle OpenRouter vérifié',
     };
   });
+}
+
+/**
+ * Catalogue via le backend (clé cabinet côté serveur).
+ * Retourne aussi `backendManaged` pour afficher OpenRouter "Configuré" sans clé locale.
+ */
+export async function fetchBackendModels(): Promise<LiveModelsResult | null> {
+  const res = await fetch(apiUrl('/models'), { method: 'GET' });
+  if (!res.ok) return null;
+  const json = await res.json().catch(() => null);
+  if (!json || !Array.isArray((json as any).models)) return null;
+  const models: LLMModel[] = (json as any).models
+    .filter((m: any) => m && typeof m.id === 'string')
+    .map((m: any) => ({
+      id: m.id,
+      name: m.name || m.id,
+      provider: m.provider === 'anthropic' || m.provider === 'deepseek' ? m.provider : 'openrouter',
+      isFree: Boolean(m.isFree),
+      description: String(m.description || 'Modèle OpenRouter vérifié').slice(0, 160),
+    }));
+  // Le modèle par défaut reste toujours en tête de liste.
+  const others = models.filter((m) => m.id !== DEFAULT_MODEL_ID);
+  return { models: [DEFAULT_MODEL, ...others], backendManaged: Boolean((json as any).backendManaged) };
 }
 
 /**

@@ -40,8 +40,15 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
   const [isOpen, setIsOpen] = useState(false);
   const [showReasoningDropdown, setShowReasoningDropdown] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  // Repositionnement intelligent : vers le bas par défaut, vers le haut
+  // uniquement si l'espace sous le bouton est insuffisant (< 380px).
+  const [openUpward, setOpenUpward] = useState(false);
+  const [reasoningUpward, setReasoningUpward] = useState(false);
+  const [menuPos, setMenuPos] = useState<{ left: number; top: number } | null>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const reasoningRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const reasoningTriggerRef = useRef<HTMLButtonElement>(null);
 
   const selectedModel =
     models.find((m) => m.id === selectedModelId) || models[0];
@@ -62,6 +69,39 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
     );
   });
 
+  // Mesure l'espace disponible sous le bouton et choisit le sens d'ouverture.
+  // Position `fixed` : échappe aux parents en overflow:hidden qui masquaient le menu.
+  const computePlacement = (btn: HTMLButtonElement | null) => {
+    const MENU_H = 400;
+    const MENU_W = 320;
+    if (!btn) return { openUp: false, left: 0, top: 0 };
+    const r = btn.getBoundingClientRect();
+    const spaceBelow = window.innerHeight - r.bottom;
+    const openUp = spaceBelow < MENU_H + 16;
+    const left = Math.max(8, Math.min(r.left, window.innerWidth - MENU_W - 8));
+    const top = openUp ? Math.max(8, r.top - MENU_H - 8) : r.bottom + 8;
+    return { openUp, left, top };
+  };
+
+  const toggleMenu = () => {
+    if (!isOpen && triggerRef.current) {
+      const p = computePlacement(triggerRef.current);
+      setOpenUpward(p.openUp);
+      setMenuPos({ left: p.left, top: p.top });
+    }
+    setIsOpen(!isOpen);
+    setShowReasoningDropdown(false);
+  };
+
+  const toggleReasoning = () => {
+    if (!showReasoningDropdown && reasoningTriggerRef.current) {
+      const r = reasoningTriggerRef.current.getBoundingClientRect();
+      setReasoningUpward(window.innerHeight - r.bottom < 220);
+    }
+    setShowReasoningDropdown(!showReasoningDropdown);
+    setIsOpen(false);
+  };
+
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       if (
@@ -77,29 +117,53 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
         setShowReasoningDropdown(false);
       }
     };
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setIsOpen(false);
+        setShowReasoningDropdown(false);
+      }
+    };
+    // Referme (et donc recalcule au prochain clic) quand la page scrolle/resize :
+    // évite un menu `fixed` orphelin de son bouton.
+    const handleRelayout = () => {
+      setIsOpen(false);
+      setShowReasoningDropdown(false);
+    };
     document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
+    document.addEventListener('keydown', handleEscape);
+    window.addEventListener('resize', handleRelayout);
+    window.addEventListener('scroll', handleRelayout, true);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleEscape);
+      window.removeEventListener('resize', handleRelayout);
+      window.removeEventListener('scroll', handleRelayout, true);
+    };
   }, []);
 
   const isProviderConfigured = (provider: LLMProvider) => {
+    // Clé cabinet côté backend : utilisable sans clé saisie par l'utilisateur.
     const orKey = apiKeys.find((k) => k.provider === 'openrouter');
-    if (orKey && orKey.isConfigured && orKey.key.length > 0) return true;
+    if (orKey && orKey.isConfigured && (orKey.backendManaged || orKey.key.length > 0)) return true;
 
     const config = apiKeys.find((k) => k.provider === provider);
-    return Boolean(config && config.isConfigured && config.key.length > 0);
+    return Boolean(config && config.isConfigured && (config.backendManaged || config.key.length > 0));
   };
+
+  const isBackendManaged = (provider: LLMProvider) =>
+    Boolean(apiKeys.find((k) => k.provider === provider)?.backendManaged);
 
   return (
     <div id="model-reasoning-controls-group" className="flex items-center gap-1.5">
-      {/* 1. Model Selector Trigger + Upward Dropdown */}
+      {/* 1. Model Selector Trigger + Dropdown (bas par défaut, haut si pas de place) */}
       <div ref={dropdownRef} className="relative inline-block">
         <button
           id="btn-model-selector-trigger"
+          ref={triggerRef}
           type="button"
-          onClick={() => {
-            setIsOpen(!isOpen);
-            setShowReasoningDropdown(false);
-          }}
+          aria-haspopup="listbox"
+          aria-expanded={isOpen}
+          onClick={toggleMenu}
           className={`flex items-center gap-1.5 px-2.5 py-1 text-[12px] font-medium rounded-lg transition-colors select-none ${
             isOpen
               ? 'bg-[#F7F7F8] text-[#111113] border border-[#111113]'
@@ -123,11 +187,18 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
           />
         </button>
 
-        {/* Upward Dropdown: 12px radius, floating shadow (0 4px 12px rgba(0,0,0,0.08)) */}
+        {/* Dropdown : fixed + z-index élevé, ne se fait ni masquer ni clipper */}
         {isOpen && (
           <div
             id="llm-models-dropdown-panel"
-            className="absolute top-full left-0 w-[320px] bg-white border border-[#E5E5E7] rounded-[12px] shadow-floating z-50 overflow-hidden flex flex-col"
+            role="listbox"
+            className="fixed w-[320px] max-h-[400px] bg-white border border-[#E5E5E7] rounded-[12px] z-[9999] overflow-hidden flex flex-col"
+            style={{
+              left: menuPos?.left ?? 0,
+              top: menuPos?.top ?? 0,
+              boxShadow: '0 12px 32px rgba(0,0,0,0.16)',
+            }}
+            data-direction={openUpward ? 'up' : 'down'}
           >
             {/* Dropdown Header */}
             <div className="px-3 py-2 border-b border-[#E5E5E7] bg-[#F7F7F8] flex items-center justify-between">
@@ -220,7 +291,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
                         {hasKey ? (
                           <span className="inline-flex items-center gap-1 text-[10px] text-[#22C55E] shrink-0 font-medium">
                             <span className="w-1.5 h-1.5 rounded-full bg-[#22C55E]"></span>
-                            Prêt
+                            {isBackendManaged(prov.id) ? 'Prêt — cabinet' : 'Prêt'}
                           </span>
                         ) : (
                           <span className="inline-flex items-center gap-1 text-[10px] text-[#F59E0B] shrink-0 font-medium">
@@ -332,11 +403,11 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
       <div ref={reasoningRef} className="relative inline-block">
         <button
           id="btn-reasoning-effort-trigger"
+          ref={reasoningTriggerRef}
           type="button"
-          onClick={() => {
-            setShowReasoningDropdown(!showReasoningDropdown);
-            setIsOpen(false);
-          }}
+          aria-haspopup="listbox"
+          aria-expanded={showReasoningDropdown}
+          onClick={toggleReasoning}
           className={`flex items-center gap-1 px-2 py-1 text-[12px] font-medium rounded-lg transition-colors select-none ${
             showReasoningDropdown
               ? 'bg-[#F7F7F8] text-[#111113] border border-[#111113]'
@@ -351,7 +422,11 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
         {showReasoningDropdown && (
           <div
             id="reasoning-effort-dropdown-panel"
-            className="absolute bottom-full mb-2 left-0 w-44 bg-white border border-[#E5E5E7] rounded-[12px] shadow-floating z-50 p-1 space-y-0.5 text-[12px]"
+            role="listbox"
+            className={`absolute left-0 w-44 bg-white border border-[#E5E5E7] rounded-[12px] z-[9999] p-1 space-y-0.5 text-[12px] ${
+              reasoningUpward ? 'bottom-full mb-2' : 'top-full mt-2'
+            }`}
+            style={{ boxShadow: '0 12px 32px rgba(0,0,0,0.16)' }}
           >
             <div className="px-2 py-1 text-[11px] font-semibold text-[#6B7280] border-b border-[#E5E5E7] mb-1">
               Réflexion IA

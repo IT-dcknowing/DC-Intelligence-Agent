@@ -176,6 +176,9 @@ export interface ApiKeyConfig {
   isConfigured: boolean;
   placeholder: string;
   lastSaved?: string;
+  // Clé cabinet gérée côté backend (functions/.env) : jamais exposée au front.
+  // Quand true, le provider est utilisable sans clé saisie par l'utilisateur.
+  backendManaged?: boolean;
 }
 
 export interface WhatsAppConfig {
