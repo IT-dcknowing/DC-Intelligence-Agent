@@ -38,6 +38,13 @@ service cloud.firestore {
     match /wa_events/{doc} {
       allow read, write: if false;
     }
+    // Signaux cross-canal + audit d'outils : backend uniquement (Admin SDK).
+    match /user_signals/{doc} {
+      allow read, write: if false;
+    }
+    match /tool_calls/{doc} {
+      allow read, write: if false;
+    }
     match /{document=**} {
       allow read, write: if false;
     }

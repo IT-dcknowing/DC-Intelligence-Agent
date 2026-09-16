@@ -246,3 +246,45 @@ export async function persistIntegration(item: WorkspaceIntegration): Promise<vo
   const { ...safe } = rest as Record<string, unknown>;
   await put(`/integrations/${encodeURIComponent(id)}`, safe);
 }
+
+// ---------- Signaux utilisateur cross-canal (§2.2) ----------
+// Identité web best-effort : id navigateur persistant. Le chaînage avec
+// l'identité WhatsApp (numéro vérifié) requiert une auth ou un numéro
+// vérifié côté web — P1, cf. PERSONA_SYSTEM_CONTRACT.md.
+const BROWSER_USER_KEY = 'dc_user_id';
+
+export function getBrowserUserId(): string {
+  try {
+    let id = localStorage.getItem(BROWSER_USER_KEY);
+    if (!id) {
+      id =
+        (typeof crypto !== 'undefined' && 'randomUUID' in crypto
+          ? (crypto as Crypto).randomUUID()
+          : `web-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`);
+      localStorage.setItem(BROWSER_USER_KEY, id);
+    }
+    return id;
+  } catch {
+    return `web-${Date.now()}`;
+  }
+}
+
+// Miroir de la détection backend (whatsapp.js FRUSTRATION_RX, version courte) :
+// toute évolution doit être reportée des deux côtés.
+const FRUSTRATION_RX =
+  /(merde|putain|bordel|fait chier|\bcon\b|connard|débile|stupide|incompétent|incompetent|nul+|nulle|marre|ras[- ]?le[- ]?bol|ça marche pas|ca marche pas|ne fonctionne pas|fonctionne pas|toujours pas|jamais.*répon|arnaque|escro|honteux|foutage|foutaise|nique)/i;
+
+export function isFrustratedText(text: string): boolean {
+  return FRUSTRATION_RX.test(String(text || ''));
+}
+
+export async function postUserSignal(
+  kind: 'frustration' | 'clarification' | 'reset',
+  userId?: string
+): Promise<void> {
+  try {
+    await post('/user-signals/event', { userId: userId || getBrowserUserId(), kind });
+  } catch {
+    // télémétrie best-effort : jamais bloquante
+  }
+}

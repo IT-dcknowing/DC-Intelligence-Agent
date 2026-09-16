@@ -1,0 +1,38 @@
+[
+  {
+    "id": "ACC-01",
+    "description": "Demande Legal Flow -> route legal (refonte §7.5)",
+    "input": "j'ai besoin d'infos sur mon compte legal flow",
+    "attendu": { "domain": "JURIDIQUE_FISCAL", "targetAgentId": "agent-3" }
+  },
+  {
+    "id": "ACC-02",
+    "description": "Demande d'humain explicite -> HUMAIN + clarification (refonte §7)",
+    "input": "je veux parler à un humain",
+    "attendu": { "domain": "HUMAIN", "requiresClarification": true }
+  },
+  {
+    "id": "ACC-03",
+    "description": "Demande comptable -> comptabilite",
+    "input": "J'ai une facture à traiter",
+    "attendu": { "domain": "COMPTABILITÉ", "targetAgentId": "agent-1" }
+  },
+  {
+    "id": "ACC-04",
+    "description": "Demande vague courte -> clarification (refonte §7.2)",
+    "input": "stp",
+    "attendu": { "domain": "ACCUEIL", "requiresClarification": true }
+  },
+  {
+    "id": "ACC-05",
+    "description": "Rapprochement bancaire -> reco",
+    "input": "rapprochement BICICI du mois",
+    "attendu": { "domain": "RAPPROCHEMENT", "targetAgentId": "agent-2" }
+  },
+  {
+    "id": "ACC-06",
+    "description": "Frustration détectée côté front (télémétrie §2.2)",
+    "input": "Merde, ça marche pas",
+    "attendu": { "frustrated": true }
+  }
+]

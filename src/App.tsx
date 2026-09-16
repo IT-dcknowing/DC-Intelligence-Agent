@@ -67,6 +67,8 @@ import {
   migrateLocalSessions,
   fetchIntegrations,
   persistIntegration,
+  isFrustratedText,
+  postUserSignal,
 } from './services/storeApi';
 
 export default function App() {
@@ -431,6 +433,12 @@ export default function App() {
       content: text,
       timestamp: timeStr,
     };
+
+    // Télémétrie frustration cross-canal (§2.2) : best-effort, jamais bloquant.
+    // Le compteur vit côté backend (user_signals, clé = user_id navigateur).
+    if (isFrustratedText(text)) {
+      postUserSignal('frustration').catch(() => {});
+    }
 
     // Multimodal Classification & Auto-Routing
     const multimodalRes = await classifyAndExtractMultimodalInput({ text });

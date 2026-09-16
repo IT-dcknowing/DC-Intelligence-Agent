@@ -14,7 +14,7 @@ try {
 } catch (e) {
   console.warn('[INIT] Firestore indisponible, fallback mémoire :', String((e && e.message) || e).slice(0, 200));
 }
-const memoryStore = { audit: [], tasks: [], agents: [], knowledge: [], conversations: [], integrations: [], wa_conversations: [], wa_events: [] };
+const memoryStore = { audit: [], tasks: [], agents: [], knowledge: [], conversations: [], integrations: [], wa_conversations: [], wa_events: [], user_signals: [], tool_calls: [] };
 
 const app = express();
 
@@ -274,28 +274,119 @@ function routeToAgent(conv, wamid, agent, context) {
   return { agent, ...context };
 }
 
+// Vigilance §2.3 — auditabilité des outils : chaque exécution est journalisée
+// {tool, paramsHash, status, latence}. Hash SHA-256 des params, JAMAIS les params
+// en clair (pas de données sensibles dans les traces). Base du KPI hallucinations.
+function paramsHash(obj) {
+  try {
+    return crypto.createHash('sha256').update(JSON.stringify(obj || {})).digest('hex').slice(0, 16);
+  } catch { return 'unhashable'; }
+}
+
+function logToolCall({ tool, software, args, status, latencyMs, wamid, phone }) {
+  storeDoc('tool_calls', {
+    tool: str(tool, 80),
+    software: str(software, 40),
+    paramsHash: paramsHash(args),
+    status: status === 'ok' ? 'ok' : 'error',
+    latencyMs: Math.max(0, Math.round(Number(latencyMs) || 0)),
+    wamid: str(wamid, 120),
+    phone: str(phone, 30),
+  }).catch(() => {});
+}
+
 // Appel JSON-RPC MCP interne (même contrat que la route). Lève en cas d'échec.
-async function mcpCallTool({ software, toolName, args }) {
+// meta {wamid, phone} optionnel : tracé dans tool_calls pour l'audit anti-hallucination.
+async function mcpCallTool({ software, toolName, args, meta }) {
   const target = mcpTargetFor(software);
   const mcpToken = (process.env.MCP_TOKEN || '').trim();
   if (!target) throw Object.assign(new Error(`backend_not_configured: aucune URL MCP pour ${software}`), { status: 503 });
   const headers = { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' };
   if (mcpToken) headers.Authorization = `Bearer ${mcpToken}`;
   const payload = (id, method, params) => ({ jsonrpc: '2.0', id, method, params });
-  const init = await fetchUpstream(target, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(payload(1, 'initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'dc-intelligence', version: '0.3.0' } })),
-  }, 'mcp');
-  if (init.status === 401) throw Object.assign(new Error('mcp_unauthorized: MCP_TOKEN invalide ou manquant'), { status: 502 });
-  const call = await fetchUpstream(target, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(payload(2, 'tools/call', { name: toolName, arguments: args || {} })),
-  }, 'mcp');
-  const text = await call.text();
-  if (!call.ok) throw Object.assign(new Error(`mcp_${call.status}: ${text.slice(0, 300)}`), { status: 502 });
-  return text.slice(0, 12000);
+  const t0 = Date.now();
+  const finish = (status) => logToolCall({
+    tool: toolName, software, args, status, latencyMs: Date.now() - t0,
+    wamid: meta && meta.wamid, phone: meta && meta.phone,
+  });
+  try {
+    const init = await fetchUpstream(target, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(payload(1, 'initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'dc-intelligence', version: '0.3.0' } })),
+    }, 'mcp');
+    if (init.status === 401) throw Object.assign(new Error('mcp_unauthorized: MCP_TOKEN invalide ou manquant'), { status: 502 });
+    const call = await fetchUpstream(target, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(payload(2, 'tools/call', { name: toolName, arguments: args || {} })),
+    }, 'mcp');
+    const text = await call.text();
+    if (!call.ok) throw Object.assign(new Error(`mcp_${call.status}: ${text.slice(0, 300)}`), { status: 502 });
+    finish('ok');
+    return text.slice(0, 12000);
+  } catch (e) {
+    finish('error');
+    throw e;
+  }
+}
+
+// Vigilance §2.2 — signaux utilisateur cross-canal, clé = user_id (jamais session_id).
+// WhatsApp : user_id = numéro. Web : id navigateur persistant (télémétrie prête
+// pour le chaînage d'identité — P1, cf. PERSONA_SYSTEM_CONTRACT.md).
+async function readUserSignal(userId) {
+  const id = str(userId, 80);
+  if (!id) return null;
+  try {
+    if (db) {
+      const snap = await withDb(db.collection('user_signals').doc(id).get(), 'userSignal:get');
+      return snap.exists ? snap.data() : null;
+    }
+    return memoryStore.user_signals.find((x) => x.userId === id) || null;
+  } catch { return null; }
+}
+
+async function writeUserSignal(userId, patch) {
+  const id = str(userId, 80);
+  if (!id) return null;
+  const now = new Date().toISOString();
+  try {
+    if (db) {
+      const ref = db.collection('user_signals').doc(id);
+      const snap = await withDb(ref.get(), 'userSignal:get');
+      const prev = snap.exists ? snap.data() : { frustrationCount: 0, clarificationCount: 0 };
+      const next = { userId: id, updatedAt: now, ...prev, ...patch };
+      await withDb(ref.set(next, { merge: true }), 'userSignal:set');
+      return next;
+    }
+    let row = memoryStore.user_signals.find((x) => x.userId === id);
+    if (!row) {
+      row = { userId: id, frustrationCount: 0, clarificationCount: 0 };
+      memoryStore.user_signals.unshift(row);
+    }
+    Object.assign(row, patch, { updatedAt: now });
+    return row;
+  } catch { return null; }
+}
+
+async function bumpUserSignal(userId, kind) {
+  // kind: 'frustration' | 'clarification'. Retourne le nouveau compteur.
+  const key = kind === 'frustration' ? 'frustrationCount' : 'clarificationCount';
+  try {
+    const prev = await readUserSignal(userId);
+    const next = (Number(prev && prev[key]) || 0) + 1;
+    await writeUserSignal(userId, { [key]: next });
+    return next;
+  } catch { return 1; }
+}
+
+async function resetUserSignals(userId) {
+  await writeUserSignal(userId, { frustrationCount: 0, clarificationCount: 0 }).catch(() => {});
+}
+
+function shouldEscalateClarification(priorCount) {
+  // Vigilance §2.1 : > 2 clarifications sans progression → humain, jamais de boucle.
+  return (Number(priorCount) || 0) >= 2;
 }
 
 async function transcribeAudioBuffer(buf, mime) {
@@ -477,11 +568,11 @@ async function handleInboundMessage(wa, { wamid, from, type, msg }) {
   // Refonte §7 — signaux prioritaires AVANT tout théâtre de présence.
   const sensitive = !hasMedia && Boolean(textBody) && waConv.isSensitive(textBody);
   const frustrated = !sensitive && !hasMedia && Boolean(textBody) && waConv.isFrustrated(textBody);
+  // Compteur cross-canal (§2.2) : user_signals, clé = numéro (wa_conversations = miroir dashboard).
   let frustrationCount = 0;
   if (frustrated) {
     try {
-      const prior = await waReadConversation(from);
-      frustrationCount = ((prior && prior.frustrationCount) || 0) + 1;
+      frustrationCount = await bumpUserSignal(from, 'frustration');
     } catch { frustrationCount = 1; }
   }
   waLogEvent({ wamid, direction: 'in', phone: from, kind: type, preview: (textBody || `[${type}]`).slice(0, 300), state: 'RECEIVED' });
@@ -631,13 +722,31 @@ async function handleInboundMessage(wa, { wamid, from, type, msg }) {
     confidence: route.confidence,
   });
 
+  // Progression réelle (routage confiant hors accueil) : on remet les compteurs à zéro.
+  if (route.agent !== 'accueil' && route.confidence >= 0.75) {
+    resetUserSignals(from).catch(() => {});
+  }
+
   // Seuil de confiance 0,75 (refonte §8.2) : en dessous, on clarifie au lieu de deviner.
   // Une seule question, jamais un interrogatoire (refonte §7.2).
+  // Vigilance §2.1 : > 2 clarifications sans progression → humain, jamais de boucle.
   if (!hasMedia && confidence < 0.75 && route.agent === 'accueil') {
+    let clarifCount = 1;
+    try {
+      clarifCount = await bumpUserSignal(from, 'clarification');
+    } catch { clarifCount = 1; }
+    console.log(`[WA STEP] wamid=${wamid} étape=clarification tentative=${clarifCount}`);
+    if (shouldEscalateClarification(clarifCount - 1)) {
+      waConv.transition(conv, waConv.STATES.RESPONDING);
+      await wa.sendText(from, 'Je préfère vous passer un conseiller humain pour bien comprendre votre besoin, plutôt que de tourner en rond.');
+      waConv.transition(conv, waConv.STATES.ESCALATED);
+      waUpsertConversation(from, { stage: 'ESCALATED', intent: 'HUMAIN', currentAgent: 'humain', clarificationCount: clarifCount });
+      return { state: conv.state };
+    }
     waConv.transition(conv, waConv.STATES.WAITING_USER);
     await wa.sendText(from, 'Pas de souci, je vais vous aider. Pour bien vous orienter : s’agit-il d’une facture ou d’une question comptable, d’un sujet fiscal ou juridique, ou d’un relevé bancaire ?');
     waConv.transition(conv, waConv.STATES.COMPLETED);
-    waUpsertConversation(from, { stage: 'WAITING_USER', intent: 'CLARIFICATION', currentAgent: 'accueil' });
+    waUpsertConversation(from, { stage: 'WAITING_USER', intent: 'CLARIFICATION', currentAgent: 'accueil', clarificationCount: clarifCount });
     return { state: conv.state };
   }
 
@@ -650,7 +759,7 @@ async function handleInboundMessage(wa, { wamid, from, type, msg }) {
   let companyId = null;
   let companyLabel = '';
   try {
-    const raw = await withTimeout(mcpCallTool({ software: 'Legal Flow', toolName: 'get_user_context', args: { phone: from } }), 12000, 'identity_timeout');
+    const raw = await withTimeout(mcpCallTool({ software: 'Legal Flow', toolName: 'get_user_context', args: { phone: from }, meta: { wamid, phone: from } }), 12000, 'identity_timeout');
     const ctx = JSON.parse((raw.match(/\{[\s\S]*\}/) || ['{}'])[0]);
     const companies = ctx.companies || (ctx.company ? [ctx.company] : []);
     if (ctx.multiple && companies.length > 1) {
@@ -684,8 +793,8 @@ async function handleInboundMessage(wa, { wamid, from, type, msg }) {
   if (route.agent === 'legal' && companyId) {
     try {
       const [statusRaw, obligRaw] = await Promise.all([
-        withTimeout(mcpCallTool({ software: 'Legal Flow', toolName: 'get_compliance_status', args: { entreprise_id: companyId } }), 15000, 'tool_timeout'),
-        withTimeout(mcpCallTool({ software: 'Legal Flow', toolName: 'get_overdue_obligations', args: { entreprise_id: companyId } }), 15000, 'tool_timeout'),
+        withTimeout(mcpCallTool({ software: 'Legal Flow', toolName: 'get_compliance_status', args: { entreprise_id: companyId }, meta: { wamid, phone: from } }), 15000, 'tool_timeout'),
+        withTimeout(mcpCallTool({ software: 'Legal Flow', toolName: 'get_overdue_obligations', args: { entreprise_id: companyId }, meta: { wamid, phone: from } }), 15000, 'tool_timeout'),
       ]);
       toolContext += `\n[Compliance] ${statusRaw.slice(0, 2500)}\n[Retards] ${obligRaw.slice(0, 2500)}`;
       actionsReelles.push('conformité (Legal Flow)', 'obligations en retard (Legal Flow)');
@@ -693,7 +802,7 @@ async function handleInboundMessage(wa, { wamid, from, type, msg }) {
       if (needSearch) {
         await say(waConv.PRESENCE.verifying); // RÉEL : une 2e vague d'outils part maintenant
         const searchRaw = await withTimeout(
-          mcpCallTool({ software: 'Legal Flow', toolName: 'lf_search_docs', args: { query: extractedText.slice(0, 300), limit: 3 } }),
+          mcpCallTool({ software: 'Legal Flow', toolName: 'lf_search_docs', args: { query: extractedText.slice(0, 300), limit: 3 }, meta: { wamid, phone: from } }),
           15000, 'tool_timeout'
         );
         toolContext += `\n[RAG juridique] ${searchRaw.slice(0, 3000)}`;
@@ -1355,9 +1464,12 @@ async function waUpsertConversationInner(phone, patch = {}, lastMsg = null) {
     updatedAt: now,
   };
   Object.keys(cleanPatch).forEach((k) => { if (!cleanPatch[k]) delete cleanPatch[k]; });
-  // Compteur de frustration : 0 est une valeur légitime (reset), on le garde explicitement.
+  // Compteurs (miroirs dashboard) : 0 est une valeur légitime (reset), gardée explicitement.
   if (Number.isInteger(patch.frustrationCount) && patch.frustrationCount >= 0) {
     cleanPatch.frustrationCount = patch.frustrationCount;
+  }
+  if (Number.isInteger(patch.clarificationCount) && patch.clarificationCount >= 0) {
+    cleanPatch.clarificationCount = patch.clarificationCount;
   }
   try {
     if (db) {
@@ -1513,9 +1625,130 @@ app.get(['/api/whatsapp/overview', '/whatsapp/overview'], async (req, res) => {
       updatedAt: c.updatedAt || '',
       lastMessages: Array.isArray(c.lastMessages) ? c.lastMessages : [],
     })).filter((c) => !activeOnly || new Date(c.updatedAt || 0).getTime() > dayAgo);
-    return res.status(200).json({ ok: true, store, phone, stats: waComputeStats(conversations, events), conversations: list.slice(0, 50) });
+    const toolCalls = await listToolCalls(2000).catch(() => []);
+    const quality = computeHallucinations(conversations, toolCalls);
+    return res.status(200).json({ ok: true, store, phone, stats: waComputeStats(conversations, events), quality, conversations: list.slice(0, 50) });
   } catch (e) {
     return res.status(500).json({ error: 'whatsapp_overview_failed' });
+  }
+});
+
+// --- Signaux utilisateur cross-canal (§2.2) ---
+// POST /api/user-signals/event { userId, kind: 'frustration'|'clarification'|'reset' }
+// (front web : userId = id navigateur persistant ; WhatsApp : numéro).
+app.post(['/api/user-signals/event', '/user-signals/event'], async (req, res) => {
+  if (!checkRateLimit(req, res, 30)) return;
+  const { userId, kind } = req.body || {};
+  if (!userId || typeof userId !== 'string' || userId.length > 80) {
+    return res.status(400).json({ error: 'userId requis (<= 80 car.)' });
+  }
+  try {
+    if (kind === 'reset') {
+      await resetUserSignals(userId);
+      return res.status(200).json({ ok: true, userId, frustrationCount: 0, clarificationCount: 0 });
+    }
+    if (kind !== 'frustration' && kind !== 'clarification') {
+      return res.status(400).json({ error: "kind: 'frustration' | 'clarification' | 'reset'" });
+    }
+    const count = await bumpUserSignal(userId, kind);
+    const sig = await readUserSignal(userId).catch(() => null);
+    return res.status(200).json({
+      ok: true,
+      userId,
+      frustrationCount: Number(sig && sig.frustrationCount) || 0,
+      clarificationCount: Number(sig && sig.clarificationCount) || 0,
+      lastBump: { kind, count },
+    });
+  } catch (e) {
+    return res.status(500).json({ error: 'user_signal_failed' });
+  }
+});
+
+app.get(['/api/user-signals/:userId', '/user-signals/:userId'], async (req, res) => {
+  if (!checkRateLimit(req, res, 30)) return;
+  try {
+    const sig = await readUserSignal(req.params.userId);
+    return res.status(200).json({
+      ok: true,
+      userId: str(req.params.userId, 80),
+      frustrationCount: Number(sig && sig.frustrationCount) || 0,
+      clarificationCount: Number(sig && sig.clarificationCount) || 0,
+    });
+  } catch (e) {
+    return res.status(500).json({ error: 'user_signal_failed' });
+  }
+});
+
+// --- KPI hallucinations (§2.3) ---
+// Un message d'agent qui prétend une vérification (« j'ai vérifié », « son retour »…)
+// SANS appel d'outil backing dans la fenêtre de conversation = hallucination flaggée.
+// Les gabarits de présence système sont exclus (audités par construction : envoi
+// conditionné aux outils réels). Objectif : hallucinations = 0.
+const CLAIM_RX = /j['’]ai (vérifié|verifie|consulté|consulte|regardé|regarde|son retour|le retour|trouvé|trouve)|son retour|voilà,? j'ai le retour/i;
+
+function isPresenceTemplate(text) {
+  try {
+    const all = Object.values(waConv.PRESENCE || {}).flat();
+    return all.includes(String(text || '').trim());
+  } catch { return false; }
+}
+
+async function listToolCalls(limit) {
+  const n = Math.min(Math.max(parseInt(String(limit || '500'), 10) || 500, 1), 2000);
+  try {
+    if (db) {
+      const snap = await withDb(db.collection('tool_calls').orderBy('createdAt', 'desc').limit(n).get(), 'toolCalls:list');
+      return snap.docs.map((d) => d.data());
+    }
+    return memoryStore.tool_calls.slice(0, n);
+  } catch { return []; }
+}
+
+function computeHallucinations(conversations, toolCalls) {
+  const okCalls = (toolCalls || []).filter((t) => t && t.status === 'ok');
+  const byPhone = new Map();
+  for (const t of okCalls) {
+    const p = String(t.phone || '');
+    if (!p) continue;
+    if (!byPhone.has(p)) byPhone.set(p, []);
+    byPhone.get(p).push(new Date(t.createdAt || 0).getTime());
+  }
+  let claims = 0;
+  const unbacked = [];
+  for (const c of conversations || []) {
+    const phone = String((c && c.phone) || '');
+    const updatedAt = new Date((c && c.updatedAt) || 0).getTime();
+    for (const m of ((c && c.lastMessages) || [])) {
+      if (!m || m.from !== 'agent' || !CLAIM_RX.test(String(m.text || ''))) continue;
+      if (isPresenceTemplate(m.text)) continue; // gabarit système : audité par construction
+      claims += 1;
+      const at = new Date(m.at || updatedAt || 0).getTime();
+      const backed = (byPhone.get(phone) || []).some((t) => t >= at - 30 * 60 * 1000 && t <= at + 5 * 60 * 1000);
+      if (!backed && unbacked.length < 50) {
+        unbacked.push({ phone, excerpt: String(m.text).slice(0, 200), at: m.at || c.updatedAt || '' });
+      }
+    }
+  }
+  return { claims, backed: claims - unbacked.length, unbacked, hallucinations: unbacked.length };
+}
+
+app.get(['/api/quality/hallucinations', '/quality/hallucinations'], async (req, res) => {
+  if (!checkRateLimit(req, res, 30)) return;
+  try {
+    const [conversations, toolCalls] = await Promise.all([
+      (async () => {
+        if (db) {
+          const snap = await withDb(db.collection('wa_conversations').orderBy('updatedAt', 'desc').limit(200).get(), 'waConv:list');
+          return snap.docs.map((d) => ({ phone: d.id, ...d.data() }));
+        }
+        return memoryStore.wa_conversations;
+      })(),
+      listToolCalls(2000),
+    ]);
+    const kpi = computeHallucinations(conversations, toolCalls);
+    return res.status(200).json({ ok: true, store: db ? 'firestore' : 'memory', window: 'lastMessages x tool_calls(ok, ±fenêtre)', ...kpi });
+  } catch (e) {
+    return res.status(500).json({ error: 'quality_failed' });
   }
 });
 
@@ -2055,4 +2288,4 @@ app.all(['/api/*', '/webhook/*'], (req, res) => {
 exports.whatsappWebhook = functions.https.onRequest(app);
 
 // Exportés pour tests locaux uniquement (aucun effet en prod).
-exports.__testUtils = { withTimeout, withDb, fetchUpstream, encodeOAuthState, decodeOAuthState, buildGoogleAuthUrl, GOOGLE_OAUTH_SCOPES };
+exports.__testUtils = { withTimeout, withDb, fetchUpstream, encodeOAuthState, decodeOAuthState, buildGoogleAuthUrl, GOOGLE_OAUTH_SCOPES, paramsHash, shouldEscalateClarification, computeHallucinations };

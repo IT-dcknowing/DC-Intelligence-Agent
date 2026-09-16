@@ -10,6 +10,7 @@
     "clean": "node -e \"import('fs').then(fs=>fs.rmSync('dist',{recursive:true,force:true}))\"",
     "lint": "tsc --noEmit",
     "test": "tsx tests/run_eval.ts",
+    "test:accueil": "tsx tests/run_eval_accueil.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
