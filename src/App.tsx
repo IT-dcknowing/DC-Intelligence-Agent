@@ -62,6 +62,7 @@ import {
   fetchLiveOpenRouterModels,
   fetchBackendModels,
   generateChatResponse,
+  friendlyInferenceError,
 } from './services/llmService';
 import {
   fetchAgents,
@@ -716,14 +717,14 @@ export default function App() {
       );
     } catch (err: any) {
       console.error('LLM Inference Error:', err);
-      // Message clair au lieu d'un silence : distingue l'indisponibilité
-      // backend (clé cabinet) des erreurs réseau/timeout.
+      // Message clair au lieu d'un silence : rate-limit, indisponibilité
+      // backend (clé cabinet), erreurs réseau/timeout.
       const raw = String(err?.message || '');
       const friendly = /backend_not_configured|AUCUNE_CLÉ_API|OPENROUTER_API_KEY/.test(raw)
         ? 'Service IA indisponible : clé cabinet manquante côté serveur. Contactez l’administrateur.'
         : /timeout|délai|Failed to fetch|NetworkError|unreachable/i.test(raw)
         ? 'Le service IA met trop de temps à répondre. Réessayez dans un instant.'
-        : (raw || 'Échec de la réponse du modèle.');
+        : friendlyInferenceError(err);
       addToast('error', 'Erreur d’inférence IA', friendly);
     } finally {
       setIsGenerating(false);

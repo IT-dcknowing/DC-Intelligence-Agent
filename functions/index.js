@@ -1294,6 +1294,15 @@ app.post(['/api/chat', '/chat'], async (req, res) => {
     if (/^backend_not_configured/.test(msg)) {
       return res.status(503).json({ error: 'backend_not_configured', detail: 'OPENROUTER_API_KEY manquant côté backend (functions/.env ou env Firebase).' });
     }
+    if (/^openrouter_429/.test(msg)) {
+      // Quota OpenRouter (surtout modèles gratuits) : log dédié + délai conseillé.
+      console.warn(`[UPSTREAM] openrouter_429 model=${String(model).slice(0, 80)}`);
+      return res.status(429).json({
+        error: 'openrouter_429',
+        detail: 'Quota OpenRouter atteint (limite du modèle gratuit). Attendez ~1 minute ou changez de modèle.',
+        retry_after_seconds: 60,
+      });
+    }
     if (/^openrouter_/.test(msg)) {
       const parts = msg.split(':');
       return res.status(status).json({ error: parts[0], detail: msg.slice(parts[0].length + 2, parts[0].length + 1002) });

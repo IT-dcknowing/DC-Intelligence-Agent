@@ -296,16 +296,33 @@ export function buildIdentityLockedPrompt(_base: string, agentContext?: AgentCon
   return buildAgentPrompt(agentContext);
 }
 
+export const RATE_LIMIT_MESSAGE =
+  'Limite de requêtes IA atteinte (quota OpenRouter du modèle). Attendez ~1 minute ou basculez sur un autre modèle — un modèle payant comme DeepSeek n’a pas ces quotas.';
+
+/**
+ * Traduit une erreur d'inférence brute en message lisible pour l'utilisateur.
+ */
+export function friendlyInferenceError(err: any): string {
+  const m = String(err?.message ?? err ?? '');
+  if (/429|LIMITE_ATTEINTE|backend_429|openrouter_429|rate.?limit|quota|trop de requêtes/i.test(m)) {
+    return RATE_LIMIT_MESSAGE;
+  }
+  return m || 'Échec de la réponse du modèle.';
+}
+
 /**
  * Appel via le proxy backend sécurisé (clé serveur).
  * Lève backend_not_configured si le backend n'a pas de clé.
+ * Sur 429 : attend le délai conseillé (plafonné) puis rejoue UNE fois,
+ * sinon lève LIMITE_ATTEINTE (message convivial via friendlyInferenceError).
  */
 async function callBackendChat(
   modelId: string,
   history: ChatMessage[],
   userMessage: string,
   reasoningEffort: ReasoningEffort,
-  agentContext?: { name: string; role: string; instructions: string }
+  agentContext?: { name: string; role: string; instructions: string },
+  attempt = 0
 ): Promise<string> {
   const systemPrompt = buildAgentPrompt(agentContext);
   const messages: Array<{ role: string; content: string }> = [{ role: 'system', content: systemPrompt }];
@@ -328,6 +345,14 @@ async function callBackendChat(
   const data = await res.json().catch(() => ({}));
   if (res.status === 503 && (data as any)?.error === 'backend_not_configured') {
     throw new Error('backend_not_configured');
+  }
+  if (res.status === 429) {
+    if (attempt === 0) {
+      const waitSec = Math.min(Number((data as any)?.retry_after_seconds) || 60, 20);
+      await new Promise((r) => setTimeout(r, waitSec * 1000));
+      return callBackendChat(modelId, history, userMessage, reasoningEffort, agentContext, 1);
+    }
+    throw new Error('LIMITE_ATTEINTE');
   }
   if (!res.ok) {
     throw new Error(`backend_${res.status}: ${String((data as any)?.detail || (data as any)?.error || res.statusText).slice(0, 300)}`);
