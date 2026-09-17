@@ -278,6 +278,43 @@ export async function migrateLocalSessions(sessions: ChatSession[]): Promise<voi
 }
 
 // ---------- Intégrations (statuts uniquement, jamais de tokens) ----------
+const VALID_INTEGRATION_IDS = ['google-sheets', 'google-docs', 'legal-flow', 'compta-flow'] as const;
+
+/**
+ * Normalise un objet d'intégration venu du cache local ou de Firestore.
+ * Retourne null si l'objet est inexploitable (id inconnu/absent).
+ * C'est le rempart contre les caches empoisonnés : un `scopes` manquant ou une
+ * entrée `null` faisait planter le rendu (.join/.map sur undefined) à chaque
+ * visite, en boucle permanente car l'état empoisonné était ré-écrit tel quel.
+ */
+export function normalizeIntegration(raw: unknown): WorkspaceIntegration | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  const id = String(r.id || '');
+  if (!(VALID_INTEGRATION_IDS as readonly string[]).includes(id)) return null;
+  const status = r.status === 'connected' ? 'connected' : r.status === 'connecting' ? 'connecting' : 'disconnected';
+  const scopes = Array.isArray(r.scopes) ? r.scopes.filter((s): s is string => typeof s === 'string') : [];
+  const syncHistory = Array.isArray(r.syncHistory)
+    ? r.syncHistory.filter((l) => l && typeof l === 'object')
+    : [];
+  const strOrUndef = (v: unknown): string | undefined => (typeof v === 'string' ? v : undefined);
+  return {
+    id: id as WorkspaceIntegration['id'],
+    name: typeof r.name === 'string' && r.name ? r.name : id,
+    description: typeof r.description === 'string' ? r.description : '',
+    iconType: r.iconType === 'docs' ? 'docs' : r.iconType === 'legal-flow' ? 'legal-flow' : 'sheets',
+    status,
+    accountEmail: strOrUndef(r.accountEmail),
+    connectedAt: strOrUndef(r.connectedAt),
+    lastSyncAt: strOrUndef(r.lastSyncAt),
+    targetResource: strOrUndef(r.targetResource),
+    endpointUrl: strOrUndef(r.endpointUrl),
+    scopes,
+    syncCount: Number.isFinite(Number(r.syncCount)) ? Number(r.syncCount) : 0,
+    syncHistory: syncHistory as WorkspaceIntegration['syncHistory'],
+  };
+}
+
 export async function fetchIntegrations(): Promise<WorkspaceIntegration[] | null> {
   const data = await get<{ ok: boolean; integrations: WorkspaceIntegration[] }>('/integrations');
   if (!data || !data.ok || !Array.isArray(data.integrations)) return null;

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { apiUrl } from '../config/env';
+import { normalizeIntegration } from '../services/storeApi';
 import {
   FileSpreadsheet,
   FileText,
@@ -41,8 +42,12 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
   onSetTargetResource,
   onGoogleOAuthSuccess,
 }) => {
-  // Valeur par défaut défensive : évite le crash si Firestore/state renvoie undefined/null
-  const integrations: WorkspaceIntegration[] = Array.isArray(integrationsProp) ? integrationsProp : [];
+  // Normalisation défensive : chaque objet est garanti complet (scopes, syncHistory…).
+  // Un objet empoisonné (null, id inconnu, scopes manquant) est écarté ici plutôt
+  // que de faire planter le rendu en permanence.
+  const integrations: WorkspaceIntegration[] = (Array.isArray(integrationsProp) ? integrationsProp : [])
+    .map(normalizeIntegration)
+    .filter((x): x is WorkspaceIntegration => x !== null);
   const [selectedId, setSelectedId] = useState<string>(integrations[0]?.id || 'google-sheets');
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
   const [customResourceDraft, setCustomResourceDraft] = useState<string>('');
@@ -296,6 +301,7 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
         {/* Clickable Integrations list */}
         <div id="connections-items-list" className="flex-1 overflow-y-auto p-2.5 space-y-2">
           {integrations.map((item) => {
+            if (!item || !item.id) return null;
             const isSelected = selectedId === item.id;
             const isConnected = item.status === 'connected';
 
@@ -634,7 +640,7 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
             <div className="text-[11px] text-[#94A3B8] flex items-center gap-1.5">
               <span>Autorisation demandée :</span>
               <code className="bg-zinc-100 text-zinc-700 px-1.5 py-0.5 rounded font-mono">
-                {selectedIntegration.scopes.join(', ')}
+                {(selectedIntegration.scopes || []).join(', ') || '—'}
               </code>
             </div>
           </div>
@@ -781,9 +787,9 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
               </span>
             </div>
 
-            {selectedIntegration.syncHistory && selectedIntegration.syncHistory.length > 0 ? (
+            {Array.isArray(selectedIntegration.syncHistory) && selectedIntegration.syncHistory.length > 0 ? (
               <div className="divide-y divide-zinc-100 border border-zinc-100 rounded-xl overflow-hidden">
-                {selectedIntegration.syncHistory.map((log) => (
+                {selectedIntegration.syncHistory.filter((log) => log && typeof log === 'object').map((log) => (
                   <div
                     key={log.id}
                     className="p-3 bg-zinc-50/50 hover:bg-zinc-50 flex items-center justify-between text-[12px] transition-colors"
