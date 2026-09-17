@@ -154,15 +154,23 @@ export default function App() {
 
   // Integrations state — catalogue-first : INITIAL_INTEGRATIONS définit les 4 cartes,
   // le cache local puis Firestore ne font que surcharger des attributs (jamais la liste).
-  // Purge des faux "connected" historiques (exemple.ci, syncs simulées) et des
-  // statuts Google non confirmés par le coffre OAuth (source de vérité via /api/google/status).
+  // LegalFlow pré-configuré = actif par défaut. Purge des faux "connected"
+  // historiques (exemple.ci, syncs simulées) et des statuts Google non confirmés
+  // par le coffre OAuth (source de vérité via /api/google/status).
   const [integrations, setIntegrations] = useState<WorkspaceIntegration[]>(() => {
     try {
       const saved = localStorage.getItem('dc_intelligence_integrations');
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          const hasMockIntegration = parsed.some(
+          const cleaned = parsed.filter(
+            (i: any) => !(i?.id === 'legal-flow' && i?.status === 'disconnected' && !i?.endpointUrl)
+          );
+          if (cleaned.length !== parsed.length) {
+            try { localStorage.removeItem('dc_intelligence_integrations'); } catch {}
+            return INITIAL_INTEGRATIONS;
+          }
+          const hasMockIntegration = cleaned.some(
             (i: any) =>
               i?.accountEmail === 'compte.google@exemple.ci' ||
               i?.accountEmail === 'alexmardochee0@gmail.com' ||
@@ -172,7 +180,7 @@ export default function App() {
             try { localStorage.removeItem('dc_intelligence_integrations'); } catch {}
             return INITIAL_INTEGRATIONS;
           }
-          return mergeIntegrationOverrides(INITIAL_INTEGRATIONS, parsed);
+          return mergeIntegrationOverrides(INITIAL_INTEGRATIONS, cleaned);
         }
       }
     } catch {
@@ -370,11 +378,22 @@ export default function App() {
       // ---- Intégrations (overlay d'attributs distants sur le catalogue) ----
       // Firestore ne définit JAMAIS la liste : on fusionne ses attributs sur les
       // cartes INITIALES (un doc distant incomplet ou inconnu est simplement ignoré).
+      // LegalFlow est pré-configuré et actif par défaut : s'il n'arrive pas en
+      // connecté, on restaure le défaut (évite "Non associé" après migration).
+      const enforceLegalDefault = (list: WorkspaceIntegration[]): WorkspaceIntegration[] => {
+        const base = INITIAL_INTEGRATIONS.find((x) => x.id === 'legal-flow');
+        if (!base) return list;
+        return list.map((it) => {
+          if (it.id !== 'legal-flow') return it;
+          if (it.status === 'connected' && it.endpointUrl) return it;
+          return { ...it, status: base.status, endpointUrl: base.endpointUrl || it.endpointUrl } as WorkspaceIntegration;
+        });
+      };
       try {
         const remoteRaw = await fetchIntegrations();
         if (Array.isArray(remoteRaw) && remoteRaw.length > 0) {
           const overlay = remoteRaw;
-          setIntegrations(() => mergeIntegrationOverrides(INITIAL_INTEGRATIONS, overlay));
+          setIntegrations(() => enforceLegalDefault(mergeIntegrationOverrides(INITIAL_INTEGRATIONS, overlay)));
         } else if (remoteRaw) {
           let local: WorkspaceIntegration[] = [];
           try {
@@ -388,7 +407,7 @@ export default function App() {
           // Catalogue-first aussi ici : le cache local ne fait que surcharger
           // les attributs des cartes INITIALES (jamais de liste venue du cache).
           const rawSource = local.length > 0 && !hasMock ? local : [];
-          const finalSource = mergeIntegrationOverrides(INITIAL_INTEGRATIONS, rawSource);
+          const finalSource = enforceLegalDefault(mergeIntegrationOverrides(INITIAL_INTEGRATIONS, rawSource));
           setIntegrations(finalSource);
           finalSource.forEach((i) => persistIntegration(i).catch(() => {}));
         }
