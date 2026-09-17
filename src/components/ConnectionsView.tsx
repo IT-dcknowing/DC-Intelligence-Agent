@@ -578,7 +578,7 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
               <div className="p-4 rounded-xl bg-white border border-emerald-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs">
                 <div className="flex items-center gap-3">
                   <div className="w-10 h-10 rounded-full bg-emerald-100 text-emerald-800 font-bold flex items-center justify-center text-sm border border-emerald-300">
-                    {selectedIntegration.accountEmail?.[0].toUpperCase() || 'G'}
+                    {(selectedIntegration.accountEmail?.[0] || 'G').toUpperCase()}
                   </div>
                   <div>
                     <div className="text-[13px] font-bold text-[#1E293B]">
