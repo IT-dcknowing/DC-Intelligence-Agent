@@ -82,7 +82,7 @@ import {
   migrateLocalSessions,
   fetchIntegrations,
   persistIntegration,
-  normalizeIntegration,
+  mergeIntegrationOverrides,
   isFrustratedText,
   postUserSignal,
 } from './services/storeApi';
@@ -152,35 +152,27 @@ export default function App() {
     }
   }, [chatSessions]);
 
-  // Integrations state — prod 0 connexion, migration purge exemple.ci,
-  // normalisation + auto-réparation : tout objet illisible du cache est écarté ;
-  // si rien d'exploitable ne reste, on repart des valeurs initiales (casse la
-  // boucle "page blanche permanente" des caches locaux empoisonnés).
+  // Integrations state — catalogue-first : INITIAL_INTEGRATIONS définit les 4 cartes,
+  // le cache local puis Firestore ne font que surcharger des attributs (jamais la liste).
+  // Purge des faux "connected" historiques (exemple.ci, syncs simulées) et des
+  // statuts Google non confirmés par le coffre OAuth (source de vérité via /api/google/status).
   const [integrations, setIntegrations] = useState<WorkspaceIntegration[]>(() => {
     try {
       const saved = localStorage.getItem('dc_intelligence_integrations');
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          const clean = parsed
-            .map(normalizeIntegration)
-            .filter((x): x is WorkspaceIntegration => x !== null);
-          if (clean.length === 0) {
-            try { localStorage.removeItem('dc_intelligence_integrations'); } catch {}
-            return INITIAL_INTEGRATIONS;
-          }
-          const hasMockIntegration = clean.some(
-            (i) => i?.accountEmail === 'compte.google@exemple.ci' || (i?.syncHistory && i.syncHistory.length > 0 && i.syncCount > 0 && i.status === 'connected')
+          const hasMockIntegration = parsed.some(
+            (i: any) =>
+              i?.accountEmail === 'compte.google@exemple.ci' ||
+              i?.accountEmail === 'alexmardochee0@gmail.com' ||
+              (i?.syncHistory && i.syncHistory.length > 0 && i.syncCount > 0 && i.status === 'connected')
           );
           if (hasMockIntegration) {
             try { localStorage.removeItem('dc_intelligence_integrations'); } catch {}
             return INITIAL_INTEGRATIONS;
           }
-          // Backfill : les intégrations ajoutées depuis (ex. Compta Flow MCP)
-          // apparaissent chez les utilisateurs existants, sans toucher à leurs statuts.
-          const knownIds = new Set(clean.map((i) => i?.id));
-          const missing = INITIAL_INTEGRATIONS.filter((i) => !knownIds.has(i.id));
-          return missing.length > 0 ? [...clean, ...missing] : clean;
+          return mergeIntegrationOverrides(INITIAL_INTEGRATIONS, parsed);
         }
       }
     } catch {
@@ -375,18 +367,15 @@ export default function App() {
         }
       } catch { /* repli : cache local */ }
 
-      // ---- Intégrations (merge statuts distants, seed/migration si vide) ----
-      // Les docs distants sont normalisés eux aussi : un doc Firestore incomplet
-      // (ex. sans `scopes`) ne doit jamais faire planter le rendu.
+      // ---- Intégrations (overlay d'attributs distants sur le catalogue) ----
+      // Firestore ne définit JAMAIS la liste : on fusionne ses attributs sur les
+      // cartes INITIALES (un doc distant incomplet ou inconnu est simplement ignoré).
       try {
         const remoteRaw = await fetchIntegrations();
-        const remote = Array.isArray(remoteRaw)
-          ? remoteRaw.map(normalizeIntegration).filter((x): x is WorkspaceIntegration => x !== null)
-          : null;
-        if (remote && remote.length > 0) {
-          const byId = new Map(remote.map((i) => [i.id, i]));
-          setIntegrations((prev) => prev.map((item) => (byId.has(item.id) ? { ...item, ...byId.get(item.id), id: item.id } : item)));
-        } else if (remote) {
+        if (Array.isArray(remoteRaw) && remoteRaw.length > 0) {
+          const overlay = remoteRaw;
+          setIntegrations(() => mergeIntegrationOverrides(INITIAL_INTEGRATIONS, overlay));
+        } else if (remoteRaw) {
           let local: WorkspaceIntegration[] = [];
           try {
             const raw = localStorage.getItem('dc_intelligence_integrations');
@@ -396,11 +385,10 @@ export default function App() {
           const hasMock = local.some(
             (i: any) => i?.accountEmail === 'compte.google@exemple.ci' || i?.accountEmail === 'alexmardochee0@gmail.com'
           );
-          const rawSource = local.length > 0 && !hasMock ? local : INITIAL_INTEGRATIONS;
-          const source = rawSource
-            .map(normalizeIntegration)
-            .filter((x): x is WorkspaceIntegration => x !== null);
-          const finalSource = source.length > 0 ? source : INITIAL_INTEGRATIONS;
+          // Catalogue-first aussi ici : le cache local ne fait que surcharger
+          // les attributs des cartes INITIALES (jamais de liste venue du cache).
+          const rawSource = local.length > 0 && !hasMock ? local : [];
+          const finalSource = mergeIntegrationOverrides(INITIAL_INTEGRATIONS, rawSource);
           setIntegrations(finalSource);
           finalSource.forEach((i) => persistIntegration(i).catch(() => {}));
         }
@@ -1078,10 +1066,15 @@ export default function App() {
         {/* VIEW 2: CONNEXIONS — ErrorBoundary évite la page blanche sur TypeError */}
         {currentTab === 'connections' && (
           <ErrorBoundary
-            fallback={
+            fallback={(error) => (
               <div className="flex-1 flex flex-col items-center justify-center p-8 text-center bg-white">
                 <h3 className="font-bold text-[15px] text-[#1E293B]">Impossible de charger les connexions</h3>
                 <p className="text-[12px] text-[#64748B] max-w-md mt-1">Réessayez ou vérifiez la configuration Firestore.</p>
+                {error && error.message ? (
+                  <code className="mt-2 max-w-md text-[11px] font-mono text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-1.5 break-all">
+                    {String(error.message).slice(0, 300)}
+                  </code>
+                ) : null}
                 <button
                   type="button"
                   onClick={() => {
@@ -1093,7 +1086,7 @@ export default function App() {
                   Réinitialiser les données locales
                 </button>
               </div>
-            }
+            )}
           >
             <ConnectionsView
               integrations={Array.isArray(integrations) ? integrations : []}

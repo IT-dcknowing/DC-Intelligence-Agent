@@ -17,6 +17,13 @@ export class ErrorBoundary extends React.Component {
 
   render() {
     if (this.state.hasError) {
+      // fallback peut être un node statique ou une fonction recevant l'erreur,
+      // pour afficher le message exact au lieu d'une page blanche muette.
+      if (typeof this.props.fallback === 'function') {
+        try {
+          return this.props.fallback(this.state.error);
+        } catch {}
+      }
       if (this.props.fallback) return this.props.fallback;
       return (
         <div className="flex-1 flex flex-col items-center justify-center p-8 text-center bg-white">

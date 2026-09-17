@@ -315,6 +315,46 @@ export function normalizeIntegration(raw: unknown): WorkspaceIntegration | null 
   };
 }
 
+/**
+ * Fusion catalogue-first : la liste des cartes est TOUJOURS définie par `base`
+ * (INITIAL_INTEGRATIONS). Les `overrides` (Firestore, cache local) ne font que
+ * surcharger des attributs (statut, email, ressource…) des cartes connues.
+ * Un doc distant inconnu, incomplet ou empoisonné ne peut donc ni vider la liste,
+ * ni faire planter le rendu — c'est la réponse structurelle à la question
+ * "pourquoi Firestore est concerné par cette partie" : il ne l'est plus pour
+ * l'existence des cartes, seulement pour leurs attributs. Le coffre OAuth
+ * (`users/admin/connections`, lu via /api/google/status) reste la source de
+ * vérité pour "connecté / pas connecté" côté Google.
+ */
+export function mergeIntegrationOverrides(
+  base: WorkspaceIntegration[],
+  overrides: unknown
+): WorkspaceIntegration[] {
+  if (!Array.isArray(overrides)) return [...base];
+  const byId = new Map<string, WorkspaceIntegration>();
+  for (const raw of overrides) {
+    const clean = normalizeIntegration(raw);
+    if (clean) byId.set(clean.id, clean);
+  }
+  return base.map((card) => {
+    const over = byId.get(card.id);
+    if (!over) return card;
+    // Les attributs distants gagnent, mais jamais au prix d'un champ vital :
+    // on repart de la carte saine et on n'écrase qu'avec des valeurs définies.
+    const merged: WorkspaceIntegration = { ...card };
+    if (over.status) merged.status = over.status;
+    if (over.accountEmail !== undefined) merged.accountEmail = over.accountEmail;
+    if (over.connectedAt !== undefined) merged.connectedAt = over.connectedAt;
+    if (over.lastSyncAt !== undefined) merged.lastSyncAt = over.lastSyncAt;
+    if (over.targetResource !== undefined) merged.targetResource = over.targetResource;
+    if (over.endpointUrl !== undefined) merged.endpointUrl = over.endpointUrl;
+    if (over.scopes.length > 0) merged.scopes = over.scopes;
+    if (typeof over.syncCount === 'number') merged.syncCount = over.syncCount;
+    if (over.syncHistory && over.syncHistory.length > 0) merged.syncHistory = over.syncHistory;
+    return merged;
+  });
+}
+
 export async function fetchIntegrations(): Promise<WorkspaceIntegration[] | null> {
   const data = await get<{ ok: boolean; integrations: WorkspaceIntegration[] }>('/integrations');
   if (!data || !data.ok || !Array.isArray(data.integrations)) return null;
