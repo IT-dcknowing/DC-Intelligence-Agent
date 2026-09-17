@@ -833,6 +833,38 @@ async function handleInboundMessage(wa, { wamid, from, type, msg }) {
   }
   await refreshTypingIfSlow();
 
+  // Outil question→réponse IA Legal Flow (tier RÉPONDRE, consigne 256b54b) :
+  // réponse affichée TELLE QUELLE, mémoire partagée via session_key stable.
+  // Timeout 60 s côté DC comme exigé. Échec → repli composition locale.
+  let lfAsk = null;
+  if (route.agent === 'legal' && extractedText) {
+    try {
+      const askRaw = await withTimeout(mcpCallTool({
+        software: 'Legal Flow', toolName: 'lf_ask',
+        args: { question: extractedText.slice(0, 2000), session_key: 'dc:' + from },
+        meta: { wamid, phone: from },
+      }), 60000, 'lfask_timeout');
+      const parsed = parseLfAsk(askRaw);
+      if (parsed) {
+        lfAsk = parsed;
+        actionsReelles.push('réponse IA Legal Flow (lf_ask)');
+        console.log(`[WA STEP] wamid=${wamid} étape=reponse_lf_ask intent=${lfAsk.intent} stage=${lfAsk.stage}`);
+      }
+    } catch (e) {
+      console.warn('[WA] lf_ask indisponible, repli composition', String((e && e.message) || e).slice(0, 150));
+      lfAsk = null;
+    }
+  }
+
+  // Clarification renvoyée par lf_ask : posée telle quelle, sans inventer.
+  if (lfAsk && lfAsk.clarification) {
+    waConv.transition(conv, waConv.STATES.WAITING_USER);
+    await wa.sendText(from, lfAsk.clarification.slice(0, 1000));
+    waConv.transition(conv, waConv.STATES.COMPLETED);
+    waUpsertConversation(from, { stage: 'WAITING_USER', intent: 'CLARIFICATION', currentAgent: 'accueil', topic: lfAsk.topic || undefined });
+    return { state: conv.state };
+  }
+
   // Tip 5 — état conversationnel injecté : le LLM voit le dossier
   // (topic/intent/nb échanges/derniers tours) au lieu de répondre hors contexte.
   let dossierContext = '';
@@ -853,7 +885,8 @@ async function handleInboundMessage(wa, { wamid, from, type, msg }) {
   }
 
   // Accusé de correction (tip 6b) : le client sait que sa rectification est prise en compte.
-  if (isCorrection) {
+  // Inutile si lf_ask répond (son answer remercie déjà de la précision) : pas de doublon.
+  if (isCorrection && !lfAsk) {
     try { await wa.sendText(from, 'Bien noté, je reprends avec votre correction.'); } catch {}
   }
 
@@ -873,6 +906,11 @@ async function handleInboundMessage(wa, { wamid, from, type, msg }) {
   // Fallback d'attente : si la composition dépasse 10 s, on prévient le client
   // au lieu de le laisser sans nouvelles (puis on complète dès que c'est prêt).
   let answer = '';
+  if (lfAsk) {
+    // Consigne Legal Flow : answer affiché TEL QUEL, sans reformulation ni résumé.
+    answer = lfAsk.answer.slice(0, 3600);
+    console.log(`[WA STEP] wamid=${wamid} étape=reponse_telle_quelle len=${answer.length}`);
+  } else {
   let composeDone = false;
   const waitTimer = setTimeout(async () => {
     if (!composeDone) {
@@ -908,11 +946,13 @@ async function handleInboundMessage(wa, { wamid, from, type, msg }) {
     return { state: conv.state };
   }
 
-  // PRÉSENCE 3 — RÉEL : « j'ai son retour » SEULEMENT si un outil a VRAIMENT répondu.
-  // Sans outil (réponse composée directement) : on envoie le résultat sans prétendre
-  // à une vérification inexistante — c'est exactement le bug « Merde » de la refonte §1.
+  } // fin repli composition (lf_ask absent — answer déjà prête sinon)
+
+  // PRÉSENCE 3 — RÉEL : « j'ai son retour » SEULEMENT si un outil a VRAIMENT répondu
+  // (lf_ask compte : appel tracé dans tool_calls). Sans outil, on envoie le résultat
+  // sans prétendre à une vérification inexistante (bug « Merde » de la refonte §1).
   waConv.transition(conv, waConv.STATES.RESULT_READY);
-  if (toolContext.trim()) await say(waConv.PRESENCE.resultReady);
+  if (toolContext.trim() || lfAsk) await say(waConv.PRESENCE.resultReady);
   waConv.transition(conv, waConv.STATES.RESPONDING);
   const chunks = waConv.splitResult(answer);
   console.log(`[WA STEP] wamid=${wamid} étape=envoi chunks=${chunks.length}`);
@@ -922,7 +962,7 @@ async function handleInboundMessage(wa, { wamid, from, type, msg }) {
     console.warn('[WA] fenêtre 24 h fermée, templates non gérés (cf dossier MCP §7).');
   }
   waConv.transition(conv, waConv.STATES.COMPLETED);
-  waUpsertConversation(from, { stage: 'COMPLETED' });
+  waUpsertConversation(from, { stage: 'COMPLETED', topic: (lfAsk && lfAsk.topic) || undefined });
   console.log(`[WA STEP] wamid=${wamid} étape=statut_final envoyés=${sent}/${chunks.length} état=${conv.state}`);
 
   // Traçabilité (fire-and-forget).
@@ -1650,6 +1690,33 @@ function parseMcpPhoneInfo(raw) {
   } catch {
     return fallback;
   }
+}
+
+// Parseur réponse lf_ask (Legal Flow, tier RÉPONDRE) : enveloppe SSE/JSON-RPC
+// → {answer, sources[≤3], intent, topic, stage, correction, clarification, fallback}.
+function parseLfAsk(raw) {
+  try {
+    const s = String(raw || '');
+    const m = s.match(/data:\s*(\{[\s\S]*\})\s*$/) || s.match(/(\{[\s\S]*\})/);
+    if (!m) return null;
+    const outer = JSON.parse(m[1].trim());
+    const text = outer && outer.result && outer.result.content && outer.result.content[0] && outer.result.content[0].text;
+    if (!text) return null;
+    const o = JSON.parse(String(text));
+    const answer = String(o.answer || '').trim();
+    if (!answer) return null;
+    return {
+      answer,
+      sources: Array.isArray(o.sources) ? o.sources.slice(0, 3) : [],
+      intent: String(o.intent || ''),
+      topic: String(o.topic || ''),
+      stage: String(o.stage || ''),
+      correction: Boolean(o.correction),
+      clarification: o.clarification ? String(o.clarification) : '',
+      fallback: Boolean(o.fallback),
+      sessionKey: String(o.session_key || o.sessionKey || ''),
+    };
+  } catch { return null; }
 }
 
 // --- Vue d'ensemble WhatsApp pour le dashboard (téléphone + stats + conversations) ---
@@ -2590,4 +2657,4 @@ app.all(['/api/*', '/webhook/*'], (req, res) => {
 exports.whatsappWebhook = functions.https.onRequest(app);
 
 // Exportés pour tests locaux uniquement (aucun effet en prod).
-exports.__testUtils = { withTimeout, withDb, fetchUpstream, encodeOAuthState, decodeOAuthState, buildGoogleAuthUrl, GOOGLE_OAUTH_SCOPES, paramsHash, shouldEscalateClarification, computeHallucinations, chunkText, cosineSim };
+exports.__testUtils = { withTimeout, withDb, fetchUpstream, encodeOAuthState, decodeOAuthState, buildGoogleAuthUrl, GOOGLE_OAUTH_SCOPES, paramsHash, shouldEscalateClarification, computeHallucinations, chunkText, cosineSim, parseLfAsk };

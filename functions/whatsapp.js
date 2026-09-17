@@ -152,13 +152,18 @@ function routeText(text) {
   if (/\b(humain|humaine|conseiller|conseillère|conseillere|agent humain|vraie personne|vrai personne|personne réelle|être humain)\b/.test(t)) {
     return { domain: 'HUMAIN', agent: 'humain', confidence: 0.9 };
   }
+  // Sigles fiscaux prioritaires : « on paie l'IMF » est fiscal, pas une paie
+  // salariale — testés AVANT « paie » compta (collision verbe/nom).
+  if (/\b(imf|ifu|rccm)\b/.test(t)) {
+    return { domain: 'JURIDIQUE_FISCAL', agent: 'legal', confidence: 0.85 };
+  }
   if (/\b(facture|achat|fournisseur|ttc|tva|601|401|bilan|écriture|ecriture|syscohada|compta|salaire|paie)\b/.test(t)) {
     return { domain: 'COMPTABILITÉ', agent: 'compta', confidence: 0.85 };
   }
   if (/\b(rapprochement|relevé|releve|banque|ecobank|sgbci|bicici|pointage|solde|521|écart|ecart|virement|lettrage)\b/.test(t)) {
     return { domain: 'RAPPROCHEMENT', agent: 'reco', confidence: 0.85 };
   }
-  if (/legal[\s_-]*flow|legalflow|\b(rccm|contentieux|conformité|conformite|fiscal|dgi|impôt|impot|statuts|contrat|bail|courrier|das|cnps|patente|retenue|télédéclaration|déclaration|declaration|juridique|tribunal|litige|amende|redressement|avis)\b/.test(t)) {
+  if (/legal[\s_-]*flow|legalflow|\b(contentieux|conformité|conformite|fiscal|dgi|impôt|impot|statuts|contrat|bail|courrier|das|cnps|patente|retenue|télédéclaration|déclaration|declaration|juridique|tribunal|litige|amende|redressement|avis)\b/.test(t)) {
     return { domain: 'JURIDIQUE_FISCAL', agent: 'legal', confidence: 0.85 };
   }
   return { domain: 'ACCUEIL', agent: 'accueil', confidence: 0.6 };

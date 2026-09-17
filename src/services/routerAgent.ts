@@ -93,9 +93,20 @@ export function routeUserRequest(
     };
   }
 
+  // Sigles fiscaux prioritaires (« on paie l'IMF » = fiscal, pas paie salariale).
+  if (/\b(imf|ifu|rccm)\b/.test(text)) {
+    return {
+      domain: 'JURIDIQUE_FISCAL',
+      targetAgentId: 'agent-3',
+      confidence: 0.85,
+      reasoning: 'Sigle fiscal détecté. Orientation vers l’Agent Juridique & Fiscal (Legal Flow).',
+      requiresClarification: false,
+    };
+  }
+
   // Domaine Juridique & Fiscal (« Legal Flow » route vers legal, jamais « pas d'accès »)
   if (
-    /legal[\s_-]*flow|legalflow|\b(rccm|contentieux|conformité|conformite|fiscal|dgi|impôt|impot|statuts|contrat|bail|das|cnps|patente|airsi|retenue|télédéclaration|e-impots)\b/.test(
+    /legal[\s_-]*flow|legalflow|\b(contentieux|conformité|conformite|fiscal|dgi|impôt|impot|statuts|contrat|bail|das|cnps|patente|airsi|retenue|télédéclaration|e-impots)\b/.test(
       text
     )
   ) {
