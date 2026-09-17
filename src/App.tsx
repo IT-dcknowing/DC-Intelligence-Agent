@@ -64,6 +64,7 @@ import {
   generateChatResponse,
   friendlyInferenceError,
 } from './services/llmService';
+import { getAccountingContext } from './services/companyContextService';
 import {
   fetchAgents,
   persistAgent,
@@ -610,6 +611,13 @@ export default function App() {
             '\n\nSources documentaires indexées (cite-les avec [doc:titre] quand tu t’en sers) :\n' +
             hits.map((h) => `[doc:${h.title}] ${h.chunk}`).join('\n---\n');
         }
+      }
+      // P0.2 Contexte entreprise injecté (jamais inventé) : companyId -> plans/tiers/journaux
+      const accCtx = getAccountingContext();
+      if (accCtx.contextStatus !== 'GENERAL_ONLY') {
+        ragBlock += `\n\n[Contexte entreprise: ${accCtx.contextStatus} — plan:${accCtx.planComptableStatus} tiers:${accCtx.planTiersStatus} journaux:${accCtx.journauxStatus}]`;
+      } else {
+        ragBlock += `\n\n[Contexte entreprise: GENERAL_ONLY — Votre plan comptable interne n'est pas encore chargé. Les comptes proposés peuvent nécessiter une adaptation.]`;
       }
 
       const aiResponseContent = await generateChatResponse({

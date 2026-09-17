@@ -267,6 +267,61 @@ export function verifierMentionsFacture(facture: MentionsFacture): { ok: boolean
 }
 
 /**
+ * Helpers P0.6 — normalisation & contrôles étendus (plan 12.3)
+ */
+export function normalizeAccountCode(raw: string): string {
+  const digits = String(raw || '').replace(/\D/g, '').slice(0, 6);
+  return (digits + '000000').slice(0, 6);
+}
+export function isSyscohadaAccount(code: string): boolean {
+  return verifierCompteSyscohada(code).ok;
+}
+export function isCollectiveAccount(code: string): boolean {
+  const c = normalizeAccountCode(code);
+  return c.startsWith('401') || c.startsWith('411');
+}
+export function normalizeTierCode(code: string): string {
+  return String(code || '').replace(/\s/g, '').slice(0, 30);
+}
+export function validateJournalType(journal: string): { ok: boolean; expected?: string } {
+  const j = String(journal || '').toUpperCase();
+  if (['ACH', 'VEN', 'BQ', 'CSE', 'OD', 'AN', 'IM', 'BGF', 'BOA', 'BGFI'].includes(j)) return { ok: true };
+  return { ok: false, expected: 'ACH/VEN/BQ/OD/AN/IM ou banque (BGF/BOA)' };
+}
+export function validateBankAccount(compte: string, banque?: string): { ok: boolean; message?: string } {
+  if (!banque) return { ok: true };
+  const c = normalizeAccountCode(compte);
+  const b = banque.toLowerCase();
+  if (b.includes('bgfi') && !c.startsWith('5211')) return { ok: false, message: `Banque BGFI attendue → compte 5211xx, reçu ${c}` };
+  if (b.includes('boa') && !c.startsWith('5212')) return { ok: false, message: `Banque BOA attendue → compte 5212xx, reçu ${c}` };
+  return { ok: true };
+}
+export function detectProforma(reference?: string, typePiece?: string): { isProforma: boolean; reason?: string } {
+  const ref = String(reference || '').trim().toUpperCase();
+  const tp = String(typePiece || '').toUpperCase();
+  if (ref.startsWith('P') && /P\d/.test(ref)) return { isProforma: true, reason: `Référence proforma ${ref} (préfixe P)` };
+  if (tp.includes('PROFORMA')) return { isProforma: true, reason: 'Type pièce PROFORMA' };
+  return { isProforma: false };
+}
+export function formatJJMMAA(dateStr?: string): string {
+  if (!dateStr) {
+    const d = new Date();
+    return `${String(d.getDate()).padStart(2, '0')}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getFullYear()).slice(-2)}`;
+  }
+  const s = String(dateStr).trim();
+  if (/^\d{6}$/.test(s)) return s;
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (m) return `${m[3]}${m[2]}${m[1].slice(-2)}`;
+  const d = new Date(s);
+  if (!isNaN(d.getTime())) return `${String(d.getDate()).padStart(2, '0')}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getFullYear()).slice(-2)}`;
+  return formatJJMMAA();
+}
+export function formatAmount(n: number): string {
+  const v = Math.round(Number(n) || 0);
+  return v > 0 ? String(v) : '';
+}
+
+/**
  * 5.8 Détecter les écritures suspectes ou non conformes
  */
 export function detecterEcrituresSuspectes(

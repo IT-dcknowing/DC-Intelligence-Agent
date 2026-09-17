@@ -282,6 +282,92 @@ export interface McpCall {
   executionTimeMs: number;
 }
 
+export type ContextStatus = 'COMPLETE' | 'PARTIAL' | 'GENERAL_ONLY' | 'INSUFFICIENT';
+export type ProposalStatus = 'DRAFT' | 'PROPOSED' | 'APPROVED' | 'PREPARED' | 'EXECUTED' | 'VERIFIED' | 'REJECTED' | 'FAILED' | 'EXPORT_READY' | 'EXPORT_GENERATED';
+export type ConfidenceLevel = 'HIGH' | 'MEDIUM' | 'LOW';
+
+export interface KnowledgeSource {
+  sourceId: string;
+  type: 'PLAN_COMPTABLE' | 'PLAN_TIERS' | 'JOURNAL' | 'REGLE_INTERNE' | 'REGLE_GENERALE' | 'HISTORIQUE' | 'PIECE' | 'KB_DOCUMENT';
+  label: string;
+  excerpt?: string;
+}
+
+export interface ValidationCheck {
+  id: string;
+  status: 'PASS' | 'FAIL' | 'WARNING';
+  message: string;
+}
+
+export interface AccountingContext {
+  companyId?: string;
+  companyName?: string;
+  exercise?: string;
+  currency?: string;
+  contextStatus: ContextStatus;
+  planComptableStatus: 'loaded' | 'empty';
+  planTiersStatus: 'loaded' | 'empty';
+  journauxStatus: 'loaded' | 'empty';
+  banquesStatus?: 'loaded' | 'empty';
+  reglesInternesStatus?: 'loaded' | 'empty';
+  connectors: ConnectorCapability[];
+}
+
+export interface ConnectorCapability {
+  connectorId: string;
+  displayName: string;
+  status: 'connected' | 'partial' | 'disconnected';
+  actions: { read: boolean; prepare: boolean; execute: boolean; verify: boolean };
+  permissions: string[];
+  lastCheckedAt: string;
+  message?: string;
+}
+
+export interface AccountingProposal {
+  proposalId: string;
+  taskId?: string;
+  companyId?: string;
+  sourceDocument?: { documentId?: string; type?: string; fileName?: string; summary?: string };
+  typePiece: 'ACHAT' | 'VENTE' | 'REGLEMENT_CLIENT' | 'REGLEMENT_FOURNISSEUR' | 'OD' | 'TRESORERIE' | 'UNKNOWN';
+  tiers?: string;
+  tiersCode?: string;
+  date?: string;
+  reference?: string;
+  montantHT?: number;
+  montantTVA?: number;
+  montantTTC?: number;
+  devise?: string;
+  journal?: string;
+  saisie?: string;
+  ecriture: Array<{ compte: string; intitule: string; debit: number; credit: number; tiersCode?: string }>;
+  justification?: string;
+  regleAppliquee?: string;
+  knowledgeSources: KnowledgeSource[];
+  checks: ValidationCheck[];
+  warnings: string[];
+  confidence: { extraction: ConfidenceLevel; identification: ConfidenceLevel; account: ConfidenceLevel; rule: ConfidenceLevel; global: ConfidenceLevel };
+  contextStatus: ContextStatus;
+  status: ProposalStatus;
+}
+
+export interface ExecutionResult {
+  executionId: string;
+  proposalId: string;
+  companyId?: string;
+  connectorId: string;
+  connectorName: string;
+  action: 'PREPARE' | 'EXECUTE' | 'VERIFY' | 'EXPORT';
+  status: 'SUCCESS' | 'FAILED' | 'PENDING' | 'UNAVAILABLE';
+  externalResourceId?: string;
+  externalReference?: string;
+  requestPayload?: unknown;
+  responsePayload?: unknown;
+  executedAt?: string;
+  verifiedAt?: string;
+  verificationStatus?: 'VERIFIED' | 'UNVERIFIED' | 'MISMATCH';
+  errorMessage?: string;
+}
+
 export interface AuditEntry {
   id: string;
   timestamp: string;

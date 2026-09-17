@@ -6,6 +6,10 @@ import {
   verifierCompteGerant,
   verifierMentionsFacture,
   detecterEcrituresSuspectes,
+  normalizeAccountCode,
+  isCollectiveAccount,
+  detectProforma,
+  validateJournalType,
 } from './accountingTools';
 
 /**
@@ -137,6 +141,43 @@ export function validateAccountingProposal(proposal: PropositionEcriture): Valid
     );
   } else {
     checksPassed++;
+  }
+
+  // --- P0.6 contrôles étendus (compatibles, ajoutés sans casser les 7 historiques) ---
+  // Proforma
+  const pro = detectProforma(proposal.reference, proposal.typePiece);
+  if (pro.isProforma) {
+    erreurs.push(`PROFORMA BLOQUÉE : ${pro.reason} — une proforma n'est pas une pièce comptable définitive.`);
+  }
+  // Montant positif
+  if (proposal.montantTTC !== undefined && proposal.montantTTC <= 0 && proposal.montantHT !== undefined && proposal.montantHT <= 0) {
+    erreurs.push('MONTANT INVALIDE : montant HT/TTC doit être > 0.');
+  }
+  // Format compte 6 chiffres + tiers obligatoire sur 401/411
+  if (proposal.ecriture) {
+    for (const l of proposal.ecriture) {
+      const norm = normalizeAccountCode(l.compte);
+      if (l.compte !== norm && l.compte.length !== 6) {
+        alertes.push(`FORMAT COMPTE : ${l.compte} normalisé en ${norm} (6 chiffres PPP000).`);
+      }
+      if (isCollectiveAccount(norm) && !(proposal as any).tiersCode && !l.credit) {
+        // tiersCode attendu sur lignes collectives — on vérifie proposition globale
+        // Si vraiment manquant, alerte (ne bloque pas si tiers renseigné)
+        if (!proposal.tiers || !String(proposal.tiers).trim()) {
+          alertes.push(`COMPTE TIERS MANQUANT : ligne ${norm} exige un code tiers (colonne 9) pour lettrage.`);
+        }
+      }
+    }
+  }
+  // Journal cohérent avec type pièce
+  const journalCheck = validateJournalType(proposal.journal);
+  if (!journalCheck.ok) {
+    alertes.push(`JOURNAL INCONNU : ${proposal.journal} — attendu ${journalCheck.expected}.`);
+  } else if (proposal.journal) {
+    const j = proposal.journal.toUpperCase();
+    const t = String(proposal.typePiece || '').toUpperCase();
+    if (t.includes('ACHAT') && j !== 'ACH' && j !== 'OD') alertes.push(`JOURNAL INCOHÉRENT : achat attendu ACH, reçu ${j}.`);
+    if (t.includes('VENTE') && j !== 'VEN' && j !== 'OD') alertes.push(`JOURNAL INCOHÉRENT : vente attendue VEN, reçu ${j}.`);
   }
 
   // Contrôles supplémentaires de sécurité
