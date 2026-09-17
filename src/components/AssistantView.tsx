@@ -898,6 +898,51 @@ export const AssistantView: React.FC<AssistantViewProps> = ({
                         </div>
                       )}
 
+                      {/* Export Sage 9 colonnes */}
+                      {!isUser && msg.proposal && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const p: any = msg.proposal;
+                            const prop = {
+                              date: p.date,
+                              saisie: (p as any).saisie || `ECR${String(Date.now()).slice(-4)}`,
+                              journal: p.journal || 'ACH',
+                              piece: p.reference || '',
+                              tiersCode: (p as any).tiersCode || (String(p.tiers || '').replace(/\s/g, '').slice(0, 12) ? `411${String(p.tiers).replace(/\s/g, '').slice(0, 8)}` : ''),
+                              libelleBase: `${p.typePiece || 'Ecriture'} ${p.reference || ''} - ${p.tiers || ''}`.trim(),
+                              ecriture: Array.isArray(p.ecriture) ? p.ecriture : [],
+                            };
+                            const { generateEcrituresTxt, generatePlanComptableTxt, generateTiersTxt, generateJournauxTxt, downloadTxt, verifyEquilibre } = require('../services/ecritureFormatter');
+                            const v = verifyEquilibre([prop]);
+                            if (!v.ok) {
+                              alert(`Équilibre à vérifier avant export : Débit ${v.totalDebit} ≠ Crédit ${v.totalCredit}. Corrige d'abord.`);
+                              return;
+                            }
+                            const ecritures = generateEcrituresTxt([prop]);
+                            const comptesMap = new Map<string, string>();
+                            for (const l of prop.ecriture) {
+                              const c6 = String(l.compte).replace(/\D/g, '').slice(0, 6).padEnd(6, '0').slice(0, 6);
+                              if (!comptesMap.has(c6)) comptesMap.set(c6, l.intitule || c6);
+                            }
+                            const plan = generatePlanComptableTxt(
+                              Array.from(comptesMap.entries()).map(([numero, intitule]) => ({ numero, intitule, classe: numero[0] || '', nature: '' }))
+                            );
+                            const tiers = prop.tiersCode
+                              ? generateTiersTxt([{ code: prop.tiersCode, nom: p.tiers || '', type: 'Client', collectif: prop.tiersCode.startsWith('401') ? '401100' : '411100' }])
+                              : '';
+                            const journaux = generateJournauxTxt([{ code: prop.journal || 'ACH', libelle: `Journal ${prop.journal || 'ACH'}`, type: prop.journal || 'ACH' }]);
+                            downloadTxt('ecritures.txt', ecritures);
+                            setTimeout(() => downloadTxt('plan_comptable.txt', plan), 300);
+                            if (tiers) setTimeout(() => downloadTxt('tiers.txt', tiers), 600);
+                            setTimeout(() => downloadTxt('journaux.txt', journaux), 900);
+                          }}
+                          title="Télécharger les 4 fichiers Sage (ecritures.txt 9 colonnes + plan + tiers + journaux)"
+                          className="absolute right-10 bottom-2 p-1 rounded-md text-[#94A3B8] hover:text-black hover:bg-white/80 opacity-0 group-hover:opacity-100 transition-opacity"
+                        >
+                          <FileSpreadsheet className="w-3.5 h-3.5" />
+                        </button>
+                      )}
                       {/* Copy Message Action Button */}
                       {!isUser && (
                         <button
