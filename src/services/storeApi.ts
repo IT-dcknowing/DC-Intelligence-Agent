@@ -59,7 +59,50 @@ function mapKnowledgeDoc(d: any): KnowledgeDocument {
     lastUpdated: String(d.lastUpdated || d.createdAt || ''),
     size: String(d.size || '—'),
     summary: String(d.summary || ''),
+    status: typeof d.status === 'string' ? d.status : undefined,
+    chunkCount: Number.isFinite(Number(d.chunkCount)) ? Number(d.chunkCount) : undefined,
+    indexReason: typeof d.indexReason === 'string' && d.indexReason ? d.indexReason : undefined,
   };
+}
+
+export interface RagHit {
+  docId: string;
+  title: string;
+  chunk: string;
+  score: number;
+}
+
+/** Recherche vectorielle réelle (fail-soft : [] si backend indisponible). */
+export async function searchKnowledge(query: string, topK = 2): Promise<RagHit[]> {
+  try {
+    if (!query || query.trim().length < 3) return [];
+    const data = await post<{ ok: boolean; results: any[] }>('/knowledge/search', {
+      query: query.slice(0, 2000),
+      topK,
+    });
+    if (!data || !data.ok || !Array.isArray(data.results)) return [];
+    return data.results
+      .filter((r) => r && typeof r.chunk === 'string')
+      .map((r) => ({
+        docId: String(r.docId || ''),
+        title: String(r.title || 'Document'),
+        chunk: String(r.chunk || '').slice(0, 800),
+        score: Number(r.score) || 0,
+      }))
+      .slice(0, topK);
+  } catch {
+    return [];
+  }
+}
+
+/** Réindexation réelle côté serveur (chunks + embeddings reconstruits). */
+export async function reindexKnowledge(id: string): Promise<KnowledgeDocument | null> {
+  const data = await post<{ ok: boolean; document: any }>(
+    `/knowledge/${encodeURIComponent(id)}/reindex`,
+    {}
+  );
+  if (!data || !data.ok || !data.document) return null;
+  return mapKnowledgeDoc({ ...data.document, id });
 }
 
 export async function seedKnowledge(docs: Array<Partial<KnowledgeDocument> & { id: string }>): Promise<void> {

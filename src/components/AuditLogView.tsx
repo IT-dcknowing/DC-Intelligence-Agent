@@ -1,15 +1,17 @@
 import React, { useState, useEffect } from 'react';
-import { Download, ShieldCheck, AlertTriangle, FileText, Filter, CheckCircle, AlertCircle, RefreshCw } from 'lucide-react';
-import { AuditEntry } from '../types';
-import { getAuditLogs, downloadAuditCSV } from '../services/auditLog';
+import { Download, ShieldCheck, AlertTriangle, FileText, Filter, CheckCircle, AlertCircle, RefreshCw, Plug } from 'lucide-react';
+import { AuditEntry, McpCall } from '../types';
+import { getAuditLogs, downloadAuditCSV, getMcpCalls } from '../services/auditLog';
 
 export const AuditLogView: React.FC = () => {
   const [logs, setLogs] = useState<AuditEntry[]>([]);
+  const [mcpCalls, setMcpCalls] = useState<McpCall[]>([]);
   const [filter, setFilter] = useState<'all' | 'valid' | 'alerts' | 'escalated'>('all');
   const [searchTerm, setSearchTerm] = useState('');
 
   const reloadLogs = () => {
     setLogs(getAuditLogs());
+    setMcpCalls(getMcpCalls());
   };
 
   useEffect(() => {
@@ -154,6 +156,38 @@ export const AuditLogView: React.FC = () => {
             onChange={(e) => setSearchTerm(e.target.value)}
             className="w-full text-xs border border-[#E5E5E7] rounded-lg px-3 py-1.5 focus:outline-none focus:border-black"
           />
+        </div>
+      </div>
+
+      {/* Appels MCP sortants (outil, agent, résultat — jamais de secrets) */}
+      <div className="px-6 pt-4">
+        <div className="border border-[#E5E5E7] rounded-xl overflow-hidden">
+          <div className="px-4 py-2.5 bg-[#FAFAFA] border-b border-[#E5E5E7] flex items-center gap-2 text-xs font-semibold text-black">
+            <Plug className="w-3.5 h-3.5" />
+            <span>Appels MCP sortants ({mcpCalls.length})</span>
+          </div>
+          {mcpCalls.length === 0 ? (
+            <div className="p-4 text-center text-[11px] text-gray-400">
+              Aucun appel MCP enregistré pour le moment (prepare/commit Compta Flow, outils Legal Flow).
+            </div>
+          ) : (
+            <div className="divide-y divide-[#E5E5E7] max-h-48 overflow-y-auto">
+              {mcpCalls.slice(0, 20).map((c) => (
+                <div key={c.id} className="px-4 py-2 flex items-center justify-between gap-3 text-[11px]">
+                  <div className="min-w-0">
+                    <span className="font-mono font-bold text-black">{c.software}.{c.toolName}</span>
+                    <span className="text-gray-400 font-mono"> [{c.permission}]</span>
+                    <div className="text-gray-500 truncate">
+                      {c.agentName} • {c.ok ? (c.resultSummary || 'OK') : c.error} • {c.executionTimeMs} ms
+                    </div>
+                  </div>
+                  <span className="text-[10px] font-mono text-gray-400 shrink-0">
+                    {new Date(c.timestamp).toLocaleString('fr-FR')}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
 

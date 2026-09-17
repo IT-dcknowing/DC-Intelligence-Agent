@@ -11,10 +11,11 @@
     "lint": "tsc --noEmit",
     "test": "tsx tests/run_eval.ts",
     "test:accueil": "tsx tests/run_eval_accueil.ts",
+    "test:compta-mcp": "tsx tests/run_eval_compta_mcp.ts",
+    "test:rag": "tsx tests/run_eval_rag.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@google/genai": "^2.4.0",
     "@tailwindcss/vite": "^4.1.14",
     "@vitejs/plugin-react": "^5.0.4",
     "dotenv": "^17.2.3",

@@ -71,6 +71,8 @@ import {
   uploadKnowledge,
   deleteKnowledgeDoc,
   downloadKnowledge,
+  reindexKnowledge,
+  searchKnowledge,
   base64ToBlob,
   fetchSessions,
   createSessionRemote,
@@ -163,7 +165,11 @@ export default function App() {
             try { localStorage.removeItem('dc_intelligence_integrations'); } catch {}
             return INITIAL_INTEGRATIONS;
           }
-          return parsed;
+          // Backfill : les intégrations ajoutées depuis (ex. Compta Flow MCP)
+          // apparaissent chez les utilisateurs existants, sans toucher à leurs statuts.
+          const knownIds = new Set(parsed.map((i: any) => i?.id));
+          const missing = INITIAL_INTEGRATIONS.filter((i) => !knownIds.has(i.id));
+          return missing.length > 0 ? [...parsed, ...missing] : parsed;
         }
       }
     } catch {
@@ -553,18 +559,41 @@ export default function App() {
 
       // Anti-crise d'identité : le contexte suit le routage FRAIS (targetAgent),
       // jamais le selectedAgentId périmé (setState asynchrone = tour précédent).
-      const activeAgent = targetAgent;
+      // Repli : le point d'entrée (Accueil), jamais un spécialiste codé en dur.
+      const entryAgent = getDefaultEntryAgent(agents);
+      const activeAgent = targetAgent || entryAgent;
+
+      // RAG réel : pour les agents documentaires (Comptabilité, Juridique & Fiscal),
+      // on injecte les chunks retrouvés (avec citation [doc:titre]) dans le message
+      // transmis au LLM. Fail-soft : sans backend, réponse sans sources, jamais inventées.
+      let ragBlock = '';
+      let ragTitles: string[] = [];
+      const needsRag =
+        activeAgent &&
+        (activeAgent.id === 'agent-1' ||
+          activeAgent.id === 'agent-3' ||
+          activeAgent.associatedSoftware === 'Compta Flow' ||
+          activeAgent.associatedSoftware === 'Legal Flow');
+      if (needsRag) {
+        const hits = await searchKnowledge(text, 2).catch(() => []);
+        if (hits.length > 0) {
+          ragTitles = [...new Set(hits.map((h) => h.title))];
+          ragBlock =
+            '\n\nSources documentaires indexées (cite-les avec [doc:titre] quand tu t’en sers) :\n' +
+            hits.map((h) => `[doc:${h.title}] ${h.chunk}`).join('\n---\n');
+        }
+      }
 
       const aiResponseContent = await generateChatResponse({
         model: modelObj,
         conversationHistory: history,
-        userMessage: text,
+        userMessage: text + ragBlock,
         apiKeys,
         reasoningEffort,
         agentContext: {
-          name: activeAgent ? activeAgent.name : 'DC Intelligence Assistant',
-          role: activeAgent ? activeAgent.role : 'Assistant Comptable & Fiscal SYSCOHADA',
-          instructions: activeAgent ? activeAgent.instructions : 'Expert Comptable SYSCOHADA Révisé.',
+          name: activeAgent ? activeAgent.name : 'Agent Accueil / Routeur Central',
+          role: activeAgent ? activeAgent.role : ACCUEIL_CANONICAL.role,
+          instructions: activeAgent ? activeAgent.instructions : ACCUEIL_CANONICAL.instructions,
         },
       });
 
@@ -605,7 +634,7 @@ export default function App() {
             // Run 7-check validation pipeline
             validationResult = validateAccountingProposal(proposal);
 
-            // Log to audit journal LocalStorage
+            // Log to audit journal LocalStorage (sources RAG réelles, jamais inventées)
             logAuditInteraction({
               source: 'chat',
               llm: {
@@ -613,6 +642,7 @@ export default function App() {
                 modele: modelObj.name,
               },
               question: text,
+              sourcesRag: ragTitles,
               ecritureProposee: proposal,
               validation: validationResult,
             });
@@ -867,6 +897,27 @@ export default function App() {
     addToast('success', 'Nouvel agent créé', `${newAgent.name} prêt à être configuré.`);
   };
 
+  // Réindexation réelle : reconstruit chunks + embeddings côté serveur.
+  const handleReindexDocument = async (docId: string) => {
+    const updated = await reindexKnowledge(docId).catch(() => null);
+    if (!updated) {
+      addToast('error', 'Réindexation impossible', 'Serveur injoignable.');
+      return;
+    }
+    setKnowledgeDocs((prev) => prev.map((d) => (d.id === docId ? { ...d, ...updated } : d)));
+    addToast(
+      updated.status === 'indexed' || updated.status === 'partial' ? 'success' : 'info',
+      updated.status === 'indexed'
+        ? 'Document indexé'
+        : updated.status === 'partial'
+        ? 'Indexation partielle'
+        : 'En attente d’indexation',
+      updated.status === 'indexed'
+        ? `${updated.chunkCount || 0} chunks vectoriels actifs.`
+        : updated.indexReason || 'Voir le statut du document.'
+    );
+  };
+
   // Knowledge base upload — fichier réel vers Firebase Storage + métadonnées Firestore.
   const handleUploadDocument = async (file: File) => {
     if (file.size <= 0 || file.size > 8_000_000) {
@@ -1045,6 +1096,7 @@ export default function App() {
             onUploadDocument={handleUploadDocument}
             onDeleteDocument={handleDeleteDocument}
             onDownloadDocument={handleDownloadDocument}
+            onReindexDocument={handleReindexDocument}
             isUploading={isUploadingDoc}
           />
         )}

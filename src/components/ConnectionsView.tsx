@@ -18,6 +18,7 @@ import {
   Database,
   Unlink,
   Scale,
+  Calculator,
   Server,
 } from 'lucide-react';
 import { WorkspaceIntegration } from '../types';
@@ -117,6 +118,21 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
   }, [reconcileGoogleStatus]);
 
   const isLegalFlow = selectedIntegration.id === 'legal-flow';
+  const isComptaFlow = selectedIntegration.id === 'compta-flow';
+  const isMcp = isLegalFlow || isComptaFlow;
+  const mcpMeta = isComptaFlow
+    ? {
+        title: 'Serveur MCP Compta Flow',
+        desc: 'Connecteur Model Context Protocol pour la comptabilité SYSCOHADA : plan comptable, écritures (prepare/commit), balances et journaux. Pas de compte Google ici : l’association se fait directement.',
+        initials: 'CF',
+        notAssociated: 'Le serveur MCP Compta Flow n’est actuellement pas associé.',
+      }
+    : {
+        title: 'Serveur MCP LegalFlow',
+        desc: 'Connecteur Model Context Protocol pour la recherche juridique et la conformité fiscale zone OHADA / UEMOA. Pas de compte Google ici : l’association se fait directement.',
+        initials: 'LF',
+        notAssociated: 'Le serveur MCP LegalFlow n’est actuellement pas associé.',
+      };
 
   // Écoute le retour de la popup OAuth (postMessage du backend après échange code<->tokens).
   useEffect(() => {
@@ -305,6 +321,8 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
                           ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
                           : item.id === 'legal-flow'
                           ? 'bg-purple-50 text-purple-700 border-purple-200'
+                          : item.id === 'compta-flow'
+                          ? 'bg-teal-50 text-teal-700 border-teal-200'
                           : 'bg-blue-50 text-blue-700 border-blue-200'
                       }`}
                     >
@@ -312,6 +330,8 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
                         <FileSpreadsheet className="w-5 h-5" />
                       ) : item.id === 'legal-flow' ? (
                         <Scale className="w-5 h-5" />
+                      ) : item.id === 'compta-flow' ? (
+                        <Calculator className="w-5 h-5" />
                       ) : (
                         <FileText className="w-5 h-5" />
                       )}
@@ -321,7 +341,7 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
                         {item.name}
                       </div>
                       <div className="text-[11px] text-[#64748B] truncate">
-                        {item.id === 'legal-flow' ? 'Protocole MCP Server' : 'Google Workspace'}
+                        {item.id === 'legal-flow' || item.id === 'compta-flow' ? 'Protocole MCP Server' : 'Google Workspace'}
                       </div>
                     </div>
                   </div>
@@ -381,6 +401,8 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
                   ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
                   : selectedIntegration.id === 'legal-flow'
                   ? 'bg-purple-50 text-purple-700 border-purple-200'
+                  : selectedIntegration.id === 'compta-flow'
+                  ? 'bg-teal-50 text-teal-700 border-teal-200'
                   : 'bg-blue-50 text-blue-700 border-blue-200'
               }`}
             >
@@ -388,6 +410,8 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
                 <FileSpreadsheet className="w-6 h-6" />
               ) : selectedIntegration.id === 'legal-flow' ? (
                 <Scale className="w-6 h-6" />
+              ) : selectedIntegration.id === 'compta-flow' ? (
+                <Calculator className="w-6 h-6" />
               ) : (
                 <FileText className="w-6 h-6" />
               )}
@@ -447,9 +471,10 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
         {/* Content Body */}
         <div className="p-6 max-w-4xl space-y-6">
           {/* ================================================================ */}
-          {/* ÉTAPE 1 : COMPTE / SERVEUR (Google OAuth vs MCP LegalFlow)        */}
           {/* ================================================================ */}
-          {isLegalFlow ? (
+          {/* ÉTAPE 1 : COMPTE / SERVEUR (Google OAuth vs MCP Legal/Compta)      */}
+          {/* ================================================================ */}
+          {isMcp ? (
           <div className="p-5 rounded-2xl border border-[#E2E8F0] bg-[#F8FAFC] space-y-4">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2.5">
@@ -457,7 +482,7 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
                   1
                 </span>
                 <h3 className="font-bold text-[15px] text-[#1E293B]">
-                  Serveur MCP LegalFlow
+                  {mcpMeta.title}
                 </h3>
               </div>
 
@@ -467,14 +492,14 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
             </div>
 
             <p className="text-[13px] text-[#64748B] leading-relaxed">
-              Connecteur Model Context Protocol pour la recherche juridique et la conformité fiscale zone OHADA / UEMOA. Pas de compte Google ici : l'association se fait directement.
+              {mcpMeta.desc}
             </p>
 
             {selectedIntegration.status === 'connected' ? (
               <div className="p-4 rounded-xl bg-white border border-emerald-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs">
                 <div className="flex items-center gap-3">
                   <div className="w-10 h-10 rounded-full bg-purple-100 text-purple-800 font-bold flex items-center justify-center text-sm border border-purple-300">
-                    LF
+                    {mcpMeta.initials}
                   </div>
                   <div>
                     <div className="text-[13px] font-bold text-[#1E293B] font-mono">
@@ -500,7 +525,7 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
             ) : (
               <div className="p-4 rounded-xl bg-white border border-[#E2E8F0] space-y-3">
                 <p className="text-[12px] text-[#475569]">
-                  Le serveur MCP LegalFlow n'est actuellement pas associé.
+                  {mcpMeta.notAssociated}
                 </p>
 
                 <button
@@ -627,7 +652,7 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
                 <h3 className="font-bold text-[15px] text-[#1E293B]">
                   {selectedIntegration.id === 'google-sheets'
                     ? 'Classeur cible & Feuilles comptables'
-                    : isLegalFlow
+                    : isMcp
                     ? 'Ressource cible MCP'
                     : 'Modèle de document cible'}
                 </h3>
@@ -641,6 +666,8 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
             <p className="text-[13px] text-[#64748B]">
               {selectedIntegration.id === 'google-sheets'
                 ? 'Sélectionnez le fichier Google Sheets dans lequel les écritures comptables générées par l’Assistant seront automatiquement insérées.'
+                : isComptaFlow
+                ? 'Nom logique de la ressource Compta Flow interrogée par les agents (plan comptable, écritures, balances).'
                 : isLegalFlow
                 ? 'Nom logique de la ressource LegalFlow interrogée par les agents (recherche juridique, conformité fiscale).'
                 : 'Sélectionnez le document Google Docs qui recevra vos lettres de mission, rapports d’audit ou synthèses de bilan.'}
@@ -667,13 +694,15 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
                     {isEditingResource ? 'Annuler' : 'Changer'}
                   </button>
 
-                  <button
-                    type="button"
-                    onClick={handleCreateDefaultResource}
-                    className="px-3 py-1 text-[12px] font-semibold rounded-lg bg-zinc-100 hover:bg-zinc-200 text-black transition-colors"
-                  >
-                    + Créer fichier type
-                  </button>
+                  {!isMcp && (
+                    <button
+                      type="button"
+                      onClick={handleCreateDefaultResource}
+                      className="px-3 py-1 text-[12px] font-semibold rounded-lg bg-zinc-100 hover:bg-zinc-200 text-black transition-colors"
+                    >
+                      + Créer fichier type
+                    </button>
+                  )}
                 </div>
               </div>
 
@@ -696,7 +725,7 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
               )}
 
               {/* Format Preview */}
-              {isLegalFlow ? (
+              {isMcp ? (
                 <div className="mt-3 pt-3 border-t border-zinc-100 text-[11px] text-[#64748B]">
                   <span className="font-semibold text-[#1E293B] block mb-1">
                     Endpoint interrogé :

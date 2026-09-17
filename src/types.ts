@@ -99,7 +99,7 @@ export interface ChatSession {
 }
 
 export interface WorkspaceIntegration {
-  id: 'google-sheets' | 'google-docs' | 'legal-flow';
+  id: 'google-sheets' | 'google-docs' | 'legal-flow' | 'compta-flow';
   name: string;
   description: string;
   iconType: 'sheets' | 'docs' | 'legal-flow';
@@ -153,6 +153,11 @@ export interface KnowledgeDocument {
   lastUpdated: string;
   size: string;
   summary: string;
+  // Indexation RAG réelle : 'indexed' = vecteurs stockés ; 'partial' = tronqué ;
+  // 'pending' = en attente/échec (voir indexReason) ; 'reference' = seed sans fichier.
+  status?: string;
+  chunkCount?: number;
+  indexReason?: string;
 }
 
 export type LLMProvider = 'openrouter' | 'anthropic' | 'deepseek' | 'groq';
@@ -260,6 +265,21 @@ export interface ValidationResult {
   erreurs: string[];
   alertes: string[];
   corrections: ValidationCorrection[];
+}
+
+export interface McpCall {
+  id: string;
+  timestamp: string;
+  agentName: string;
+  software: 'Legal Flow' | 'Compta Flow' | 'RECO';
+  toolName: string;
+  permission: ActionPermission;
+  // Résumé des paramètres SANS secrets (jamais de tokens/clés ici).
+  paramsSummary: string;
+  ok: boolean;
+  resultSummary?: string;
+  error?: string;
+  executionTimeMs: number;
 }
 
 export interface AuditEntry {

@@ -20,6 +20,7 @@ interface KnowledgeBaseViewProps {
   onUploadDocument?: (file: File) => void;
   onDeleteDocument?: (id: string) => void;
   onDownloadDocument?: (doc: KnowledgeDocument) => void;
+  onReindexDocument?: (id: string) => Promise<void>;
   isUploading?: boolean;
 }
 
@@ -28,6 +29,7 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
   onUploadDocument,
   onDeleteDocument,
   onDownloadDocument,
+  onReindexDocument,
   isUploading = false,
 }) => {
   const [selectedDocId, setSelectedDocId] = useState<string>(documents[0]?.id || '');
@@ -91,13 +93,18 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
 
   const selectedDoc = documents.find((d) => d.id === selectedDocId) || documents[0];
 
-  const handleReindex = () => {
+  // Réindexation RÉELLE côté serveur (chunks + embeddings reconstruits).
+  // Sans handler parent, le bouton est désactivé plutôt que de simuler.
+  const handleReindex = async () => {
+    if (!onReindexDocument || !selectedDoc) return;
     setIsReindexing(true);
-    setTimeout(() => {
-      setIsReindexing(false);
+    try {
+      await onReindexDocument(selectedDoc.id);
       setReindexSuccess(true);
       setTimeout(() => setReindexSuccess(false), 2500);
-    }, 1200);
+    } finally {
+      setIsReindexing(false);
+    }
   };
 
   const handleDrop = (e: React.DragEvent) => {
@@ -271,7 +278,8 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
               <button
                 type="button"
                 onClick={handleReindex}
-                disabled={isReindexing}
+                disabled={isReindexing || !onReindexDocument}
+                title={onReindexDocument ? 'Reconstruire chunks + embeddings côté serveur' : 'Réindexation indisponible'}
                 className="px-4 py-2.5 rounded-xl border border-[#E2E8F0] hover:bg-[#F8FAFC] text-[#475569] text-[13px] font-semibold flex items-center gap-2 transition-colors disabled:opacity-50"
               >
                 <RefreshCw className={`w-4 h-4 ${isReindexing ? 'animate-spin text-black' : ''}`} />
@@ -332,7 +340,7 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
               </p>
             </div>
 
-            {/* Section Indexation pour les agents IA */}
+            {/* Section Indexation pour les agents IA — état RÉEL du serveur */}
             <div className="p-6 rounded-2xl border border-[#E4E4E7] bg-[#F4F4F5]/70 space-y-4">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2.5">
@@ -344,27 +352,43 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
                       Indexation pour les agents IA (RAG)
                     </h3>
                     <p className="text-[12px] text-[#64748B]">
-                      Chunks sémantiques actifs dans la mémoire vectorielle de l'espace comptable
+                      {selectedDoc.status === 'indexed'
+                        ? `${selectedDoc.chunkCount || 0} chunks vectoriels actifs — interrogeables par les agents`
+                        : selectedDoc.status === 'partial'
+                        ? `${selectedDoc.chunkCount || 0} chunks indexés (texte tronqué au plafond)`
+                        : selectedDoc.status === 'reference'
+                        ? 'Référence sans fichier : aucune indexation possible'
+                        : selectedDoc.indexReason || 'En attente d’indexation'}
                     </p>
                   </div>
                 </div>
 
                 <div className="flex items-center gap-2 text-[12px] font-semibold text-black bg-white px-3 py-1.5 rounded-full border border-[#E4E4E7] shadow-xs">
-                  <span className="w-2 h-2 rounded-full bg-black animate-ping" />
-                  <span>Indexé (Vector DB)</span>
+                  <span
+                    className="w-2 h-2 rounded-full"
+                    style={{ background: selectedDoc.status === 'indexed' ? '#000' : '#A1A1AA' }}
+                  />
+                  <span>
+                    {selectedDoc.status === 'indexed'
+                      ? 'Indexé'
+                      : selectedDoc.status === 'partial'
+                      ? 'Partiel'
+                      : selectedDoc.status === 'reference'
+                      ? 'Référence'
+                      : 'Non indexé'}
+                  </span>
                 </div>
               </div>
 
-              {/* Linked agents pills */}
+              {/* Linked agents pills — seuls les agents réellement alimentés par la recherche */}
               <div>
                 <span className="text-[12px] font-semibold text-[#475569] block mb-2">
-                  Agents connectés à ce document :
+                  Agents alimentés par la recherche :
                 </span>
                 <div className="flex flex-wrap gap-2">
                   {[
-                    'Agent Rapprochement Bancaire',
-                    'Agent Déclaration Fiscale & TVA',
-                    'Agent Facturation & Relance Client',
+                    'Agent Comptabilité',
+                    'Agent Juridique & Fiscal',
                   ].map((agentName) => (
                     <span
                       key={agentName}

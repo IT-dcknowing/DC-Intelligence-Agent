@@ -1372,6 +1372,33 @@ app.post(['/api/classify-vision', '/classify-vision'], async (req, res) => {
 app.post(['/api/audit', '/audit'], async (req, res) => {
   if (!checkRateLimit(req, res, 60)) return;
   const entry = req.body || {};
+  // Traçabilité des appels MCP sortants (outil, paramètres sans secrets, résultat).
+  if (entry.mcpCall && typeof entry.mcpCall === 'object') {
+    const mc = entry.mcpCall;
+    try {
+      const saved = await storeDoc('dc_audit', {
+        source: 'mcp',
+        llm: {},
+        question: `MCP ${str(mc.software, 40)}.${str(mc.toolName, 80)} (${str(mc.permission, 20)}) par ${str(mc.agentName, 120)}`,
+        ecritureProposee: null,
+        validation: null,
+        mcp: {
+          agentName: str(mc.agentName, 120),
+          software: str(mc.software, 40),
+          toolName: str(mc.toolName, 80),
+          permission: str(mc.permission, 20),
+          paramsSummary: str(mc.paramsSummary, 2000),
+          ok: Boolean(mc.ok),
+          resultSummary: str(mc.resultSummary, 2000),
+          error: str(mc.error, 500),
+          executionTimeMs: num(mc.executionTimeMs, 0),
+        },
+      });
+      return res.status(200).json({ ok: true, entry: saved, store: firestoreMode });
+    } catch (e) {
+      return res.status(500).json({ error: 'audit_store_failed', detail: String((e && e.message) || e).slice(0, 300) });
+    }
+  }
   if (!entry.question && !entry.ecritureProposee) {
     return res.status(400).json({ error: 'question ou ecritureProposee requis' });
   }
@@ -1901,6 +1928,145 @@ function storageBucket() {
   return name ? admin.storage().bucket(name) : admin.storage().bucket();
 }
 
+// ============ RAG RÉEL (chunks + embeddings OpenRouter, vecteurs Firestore) ============
+// Statuts honnêtes : 'indexed' = embeddings stockés ; 'partial' = texte tronqué
+// (plafond anti-coût) ; 'pending' = en attente/échec (voir indexReason) ;
+// 'reference' = métadonnées seules (seed, sans fichier).
+const RAG_EMBED_MODEL = (process.env.RAG_EMBED_MODEL || 'openai/text-embedding-3-small').trim();
+const RAG_CHUNK_SIZE = 800;
+const RAG_CHUNK_OVERLAP = 100;
+const RAG_MAX_CHUNKS_PER_DOC = 60;
+const RAG_MIN_SCORE = 0.3;
+
+function chunkText(text, size, overlap) {
+  const clean = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!clean) return [];
+  size = size || RAG_CHUNK_SIZE;
+  overlap = overlap || RAG_CHUNK_OVERLAP;
+  const sentences = clean.split(/(?<=[.!?…])\s+/);
+  const chunks = [];
+  let cur = '';
+  for (const s of sentences) {
+    if (!s) continue;
+    if (s.length > size) {
+      if (cur.trim()) { chunks.push(cur.trim()); cur = ''; }
+      for (let i = 0; i < s.length; i += size - overlap) {
+        chunks.push(s.slice(i, i + size));
+      }
+      continue;
+    }
+    if ((cur + ' ' + s).trim().length > size && cur.trim()) {
+      chunks.push(cur.trim());
+      const tail = cur.slice(-overlap);
+      cur = (tail + ' ' + s).trim();
+    } else {
+      cur = (cur ? cur + ' ' : '') + s;
+    }
+  }
+  if (cur.trim()) chunks.push(cur.trim());
+  return chunks.filter(Boolean);
+}
+
+function cosineSim(a, b) {
+  if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length || !a.length) return 0;
+  let dot = 0, na = 0, nb = 0;
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i] * b[i]; na += a[i] * a[i]; nb += b[i] * b[i];
+  }
+  if (!na || !nb) return 0;
+  return dot / (Math.sqrt(na) * Math.sqrt(nb));
+}
+
+async function embedTexts(texts) {
+  const apiKey = (process.env.OPENROUTER_API_KEY || '').trim();
+  if (!apiKey) throw Object.assign(new Error('backend_not_configured: OPENROUTER_API_KEY manquant'), { status: 503 });
+  const out = [];
+  for (let i = 0; i < texts.length; i += 32) {
+    const batch = texts.slice(i, i + 32);
+    const r = await fetchUpstream('https://openrouter.ai/api/v1/embeddings', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+        'HTTP-Referer': process.env.APP_URL || 'https://dcintelligenceio.web.app',
+        'X-Title': 'DC Intelligence RAG',
+      },
+      body: JSON.stringify({ model: RAG_EMBED_MODEL, input: batch }),
+    }, 'openrouter');
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      const e = new Error(`openrouter_${r.status}: ${String((data && data.error && data.error.message) || r.statusText).slice(0, 200)}`);
+      e.status = r.status;
+      throw e;
+    }
+    const arr = Array.isArray(data.data) ? data.data : [];
+    for (const item of arr) {
+      if (item && Array.isArray(item.embedding)) out.push(item.embedding);
+    }
+  }
+  if (out.length !== texts.length) throw Object.assign(new Error('embeddings_incomplets'), { status: 502 });
+  return out;
+}
+
+async function storeDocChunks(docId, chunks) {
+  if (db) {
+    const col = db.collection('knowledge_documents').doc(String(docId)).collection('chunks');
+    const existing = await col.limit(500).get().catch(() => null);
+    if (existing) {
+      const batch = db.batch();
+      existing.docs.forEach((d) => batch.delete(d.ref));
+      await batch.commit().catch(() => {});
+    }
+    for (let i = 0; i < chunks.length; i += 100) {
+      const batch = db.batch();
+      chunks.slice(i, i + 100).forEach((c, j) => {
+        batch.set(col.doc(`c-${String(i + j).padStart(4, '0')}`), { idx: i + j, text: c.text, embedding: c.embedding });
+      });
+      await batch.commit();
+    }
+    return;
+  }
+  memoryStore.knowledgeChunks = memoryStore.knowledgeChunks || {};
+  memoryStore.knowledgeChunks[String(docId)] = chunks;
+}
+
+async function readDocChunks(docId, limit) {
+  const n = Math.min(Math.max(limit || 200, 1), 500);
+  if (db) {
+    const snap = await db.collection('knowledge_documents').doc(String(docId)).collection('chunks').orderBy('idx').limit(n).get().catch(() => null);
+    if (!snap) return [];
+    return snap.docs.map((d) => d.data());
+  }
+  const all = (memoryStore.knowledgeChunks && memoryStore.knowledgeChunks[String(docId)]) || [];
+  return all.slice(0, n);
+}
+
+// Indexe un texte : chunks -> embeddings -> stockage. Retourne {chunkCount, truncated}.
+// Ne lève jamais de secret ; toute erreur remonte avec un code (statut pending + motif).
+async function indexDocumentText(docId, text) {
+  const chunks = chunkText(text).slice(0, RAG_MAX_CHUNKS_PER_DOC);
+  if (!chunks.length) throw Object.assign(new Error('texte_vide'), { status: 400 });
+  const vectors = await embedTexts(chunks);
+  await storeDocChunks(docId, chunks.map((t, i) => ({ text: t, embedding: vectors[i] })));
+  return { chunkCount: chunks.length, truncated: chunkText(text).length > chunks.length };
+}
+
+async function setDocIndexState(docId, patch) {
+  const safe = {
+    status: str(patch.status, 20),
+    chunkCount: num(patch.chunkCount, 0),
+    indexReason: str(patch.indexReason, 300),
+    lastUpdated: new Date().toISOString(),
+  };
+  if (db) {
+    await db.collection('knowledge_documents').doc(String(docId)).set(safe, { merge: true });
+  } else {
+    const row = memoryStore.knowledge.find((x) => x.id === String(docId));
+    if (row) Object.assign(row, safe);
+  }
+  return safe;
+}
+
 app.get(['/api/knowledge', '/knowledge'], async (req, res) => {
   if (!checkRateLimit(req, res, 60)) return;
   try {
@@ -1974,6 +2140,7 @@ app.post(['/api/knowledge/upload', '/knowledge/upload'], async (req, res) => {
   const lower = cleanName.toLowerCase();
   const isText = /^(text\/|application\/(json|csv|x-www-form-urlencoded))/.test(mime) || /\.(txt|md|csv|json)$/i.test(lower);
   const now = new Date().toISOString();
+  const fullText = isText ? buf.toString('utf8').slice(0, 200000) : '';
   const row = {
     title: cleanName.replace(/\.[^/.]+$/, '').slice(0, 120) || cleanName.slice(0, 120),
     category: str(category, 60) || 'RÉFÉRENCES',
@@ -1981,7 +2148,9 @@ app.post(['/api/knowledge/upload', '/knowledge/upload'], async (req, res) => {
     sizeBytes: buf.length,
     mimeType: mime,
     storagePath: stored ? storagePath : null,
-    status: stored ? 'indexed' : 'pending',
+    status: 'pending',
+    chunkCount: 0,
+    indexReason: stored ? (isText ? 'indexation en cours' : 'extraction non supportée (texte uniquement : .txt/.md/.csv/.json)') : 'fichier non stocké — réessayez',
     summary: `Document importé : ${cleanName}.${stored ? '' : ' (fichier non stocké — réessayez)'}`,
     textPreview: isText ? buf.toString('utf8').slice(0, 4000) : '',
     lastUpdated: now,
@@ -1990,9 +2159,104 @@ app.post(['/api/knowledge/upload', '/knowledge/upload'], async (req, res) => {
   try {
     if (db) await db.collection('knowledge_documents').doc(id).set(row);
     else memoryStore.knowledge.unshift({ id, ...row });
-    return res.status(200).json({ ok: true, store: db ? 'firestore' : 'memory', document: { id, ...row } });
   } catch (e) {
     return res.status(500).json({ error: 'knowledge_save_failed' });
+  }
+  // Indexation réelle (chunks + embeddings) : le statut ne passe à 'indexed'
+  // que si les vecteurs sont stockés. Échec -> 'pending' + motif, jamais de mensonge.
+  if (stored && fullText.trim().length >= 20) {
+    try {
+      const { chunkCount, truncated } = await indexDocumentText(id, fullText);
+      Object.assign(
+        row,
+        await setDocIndexState(id, {
+          status: truncated ? 'partial' : 'indexed',
+          chunkCount,
+          indexReason: truncated ? `texte tronqué à ${chunkCount} chunks (plafond anti-coût)` : '',
+        })
+      );
+    } catch (e) {
+      const msg = String((e && e.message) || 'indexation_echec');
+      Object.assign(row, await setDocIndexState(id, { status: 'pending', chunkCount: 0, indexReason: msg.slice(0, 200) }));
+    }
+  }
+  return res.status(200).json({ ok: true, store: db ? 'firestore' : 'memory', document: { id, ...row } });
+});
+
+// Recherche vectorielle : query -> embedding -> cosinus sur les chunks indexés.
+// Retourne [{docId, title, chunk, score}] triés, score >= 0.3, topK borné.
+app.post(['/api/knowledge/search', '/knowledge/search'], async (req, res) => {
+  if (!checkRateLimit(req, res, 20)) return;
+  const query = str((req.body || {}).query, 2000).trim();
+  const topK = Math.min(Math.max(parseInt(String((req.body || {}).topK || '3'), 10) || 3, 1), 5);
+  if (query.length < 3) return res.status(400).json({ error: 'query requis (>= 3 car.)' });
+  try {
+    const [qVec] = await embedTexts([query]);
+    let docs = [];
+    if (db) {
+      const snap = await db.collection('knowledge_documents').limit(50).get();
+      docs = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    } else {
+      docs = memoryStore.knowledge.slice(0, 50);
+    }
+    const scored = [];
+    for (const d of docs) {
+      if (d.status !== 'indexed' && d.status !== 'partial') continue;
+      const chunks = await readDocChunks(d.id, 200).catch(() => []);
+      for (const c of chunks) {
+        if (!c || !Array.isArray(c.embedding)) continue;
+        const score = cosineSim(qVec, c.embedding);
+        if (score >= RAG_MIN_SCORE) {
+          scored.push({ docId: d.id, title: String(d.title || ''), chunk: String(c.text || '').slice(0, 800), score: Math.round(score * 1000) / 1000 });
+        }
+      }
+      if (scored.length > 500) break;
+    }
+    scored.sort((a, b) => b.score - a.score);
+    return res.status(200).json({ ok: true, results: scored.slice(0, topK) });
+  } catch (e) {
+    const msg = String((e && e.message) || 'search_unreachable');
+    if (/^backend_not_configured/.test(msg)) {
+      return res.status(503).json({ error: 'backend_not_configured', detail: 'OPENROUTER_API_KEY manquant côté backend.' });
+    }
+    return res.status(502).json({ error: 'knowledge_search_failed', detail: msg.slice(0, 200) });
+  }
+});
+
+// Réindexation réelle : relit le binaire stocké et reconstruit chunks + embeddings.
+app.post(['/api/knowledge/:id/reindex', '/knowledge/:id/reindex'], async (req, res) => {
+  if (!checkRateLimit(req, res, 10)) return;
+  const id = str(req.params.id, 80);
+  try {
+    let doc = null;
+    if (db) {
+      const snap = await db.collection('knowledge_documents').doc(id).get();
+      if (snap.exists) doc = snap.data();
+    } else {
+      doc = memoryStore.knowledge.find((x) => x.id === id) || null;
+    }
+    if (!doc) return res.status(404).json({ error: 'document introuvable' });
+    if (!doc.storagePath) {
+      await setDocIndexState(id, { status: 'pending', chunkCount: 0, indexReason: 'référence sans binaire (seed)' });
+      return res.status(200).json({ ok: true, document: { id, status: 'pending', chunkCount: 0 } });
+    }
+    const [buf] = await storageBucket().file(doc.storagePath).download();
+    const text = buf.toString('utf8').slice(0, 200000);
+    if (text.trim().length < 20) {
+      await setDocIndexState(id, { status: 'pending', chunkCount: 0, indexReason: 'extraction non supportée (texte uniquement)' });
+      return res.status(200).json({ ok: true, document: { id, status: 'pending', chunkCount: 0 } });
+    }
+    const { chunkCount, truncated } = await indexDocumentText(id, text);
+    const state = await setDocIndexState(id, {
+      status: truncated ? 'partial' : 'indexed',
+      chunkCount,
+      indexReason: truncated ? `texte tronqué à ${chunkCount} chunks (plafond anti-coût)` : '',
+    });
+    return res.status(200).json({ ok: true, document: { id, ...state } });
+  } catch (e) {
+    const msg = String((e && e.message) || 'reindex_failed');
+    try { await setDocIndexState(id, { status: 'pending', chunkCount: 0, indexReason: msg.slice(0, 200) }); } catch {}
+    return res.status(502).json({ error: 'knowledge_reindex_failed', detail: msg.slice(0, 200) });
   }
 });
 
@@ -2043,6 +2307,19 @@ app.delete(['/api/knowledge/:id', '/knowledge/:id'], async (req, res) => {
     if (storagePath) {
       try { await storageBucket().file(storagePath).delete(); } catch {}
     }
+    // Suppression des vecteurs avec le document (pas de chunks orphelins).
+    try {
+      if (db) {
+        const csnap = await db.collection('knowledge_documents').doc(id).collection('chunks').limit(500).get().catch(() => null);
+        if (csnap) {
+          const batch = db.batch();
+          csnap.docs.forEach((d) => batch.delete(d.ref));
+          await batch.commit().catch(() => {});
+        }
+      } else if (memoryStore.knowledgeChunks) {
+        delete memoryStore.knowledgeChunks[id];
+      }
+    } catch {}
     try { await storeDoc('dc_audit', { source: 'knowledge', question: `Suppression document ${id}`, validation: { ok: true } }); } catch {}
     return res.status(200).json({ ok: true, id });
   } catch (e) {
@@ -2313,4 +2590,4 @@ app.all(['/api/*', '/webhook/*'], (req, res) => {
 exports.whatsappWebhook = functions.https.onRequest(app);
 
 // Exportés pour tests locaux uniquement (aucun effet en prod).
-exports.__testUtils = { withTimeout, withDb, fetchUpstream, encodeOAuthState, decodeOAuthState, buildGoogleAuthUrl, GOOGLE_OAUTH_SCOPES, paramsHash, shouldEscalateClarification, computeHallucinations };
+exports.__testUtils = { withTimeout, withDb, fetchUpstream, encodeOAuthState, decodeOAuthState, buildGoogleAuthUrl, GOOGLE_OAUTH_SCOPES, paramsHash, shouldEscalateClarification, computeHallucinations, chunkText, cosineSim };

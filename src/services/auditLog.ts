@@ -1,4 +1,4 @@
-import { AuditEntry, PropositionEcriture, ValidationResult } from '../types';
+import { AuditEntry, McpCall, PropositionEcriture, ValidationResult } from '../types';
 import { apiUrl } from '../config/env';
 
 const AUDIT_LOG_STORAGE_KEY = 'dc_intelligence_audit_log';
@@ -42,6 +42,7 @@ export function logAuditInteraction(params: {
   fichier?: { nom: string; hash: string; taille: number };
   llm: { provider: string; modele: string; tokensInput?: number; tokensOutput?: number };
   question: string;
+  // Sources RAG réelles (titres des chunks retrouvés) — [] par défaut, jamais inventées.
   sourcesRag?: string[];
   ecritureProposee: PropositionEcriture;
   validation: ValidationResult;
@@ -56,7 +57,7 @@ export function logAuditInteraction(params: {
     fichier: params.fichier,
     llm: params.llm,
     question: params.question,
-    sourcesRag: params.sourcesRag || ['SYSCOHADA.md', 'BARÈME_TVA_DGI.md'],
+    sourcesRag: params.sourcesRag || [],
     ecritureProposee: params.ecritureProposee,
     validation: params.validation,
     correctionsUtilisateur: params.correctionsUtilisateur,
@@ -84,6 +85,49 @@ export function logAuditInteraction(params: {
   } catch {}
 
   return newEntry;
+}
+
+const MCP_LOG_STORAGE_KEY = 'dc_intelligence_mcp_log';
+const MCP_LOG_MAX = 200;
+
+/** Journal local des appels MCP sortants (borné). */
+export function getMcpCalls(): McpCall[] {
+  try {
+    const raw = localStorage.getItem(MCP_LOG_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed;
+    }
+  } catch (e) {
+    console.warn('Could not load MCP log from localStorage', e);
+  }
+  return [];
+}
+
+/**
+ * Journalise un appel MCP sortant (outil, paramètres sans secrets, résultat).
+ * Miroir serveur fire-and-forget (collection dc_audit, source 'mcp').
+ */
+export function logMcpCall(call: Omit<McpCall, 'id' | 'timestamp'>): McpCall {
+  const entry: McpCall = {
+    ...call,
+    id: `MCP-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+    timestamp: new Date().toISOString(),
+  };
+  try {
+    const current = getMcpCalls();
+    localStorage.setItem(MCP_LOG_STORAGE_KEY, JSON.stringify([entry, ...current].slice(0, MCP_LOG_MAX)));
+  } catch (e) {
+    console.warn('Could not save MCP log to localStorage', e);
+  }
+  try {
+    fetch(apiUrl('/audit'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mcpCall: entry }),
+    }).catch(() => {});
+  } catch {}
+  return entry;
 }
 
 /**

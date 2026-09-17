@@ -146,6 +146,7 @@ export const INITIAL_KNOWLEDGE: KnowledgeDocument[] = [
     lastUpdated: '10 Août 2024',
     size: '2.4 MB',
     summary: 'Nomenclature officielle des comptes classes 1 à 9 pour l’espace OHADA avec règles d’évaluation et de comptabilisation.',
+    status: 'reference',
   },
   {
     id: 'doc-2',
@@ -154,6 +155,7 @@ export const INITIAL_KNOWLEDGE: KnowledgeDocument[] = [
     lastUpdated: '02 Sept 2024',
     size: '1.1 MB',
     summary: 'Spécifications techniques du sticker fiscal, mentions obligatoires sur factures d’entreprises en Côte d’Ivoire.',
+    status: 'reference',
   },
   {
     id: 'doc-3',
@@ -162,6 +164,7 @@ export const INITIAL_KNOWLEDGE: KnowledgeDocument[] = [
     lastUpdated: '28 Août 2024',
     size: '640 KB',
     summary: 'Checklist des travaux de fin de mois : lettrage des comptes clients/fournisseurs, inventaire caisse, états bancaires.',
+    status: 'reference',
   },
   {
     id: 'doc-4',
@@ -170,6 +173,7 @@ export const INITIAL_KNOWLEDGE: KnowledgeDocument[] = [
     lastUpdated: '15 Juillet 2024',
     size: '890 KB',
     summary: 'Taux des cotisations régime général de retraite, prestations familiales, accidents de travail et ITS.',
+    status: 'reference',
   },
 ];
 
@@ -242,6 +246,16 @@ export const INITIAL_INTEGRATIONS: WorkspaceIntegration[] = [
       'https://www.googleapis.com/auth/drive.file',
       'https://www.googleapis.com/auth/userinfo.email',
     ],
+    syncCount: 0,
+    syncHistory: [],
+  },
+  {
+    id: 'compta-flow',
+    name: 'Compta Flow MCP Server',
+    description: 'Connecteur Model Context Protocol (MCP) pour la comptabilité SYSCOHADA : plan comptable, écritures (prepare/commit), balances et journaux PDF.',
+    iconType: 'sheets',
+    status: 'disconnected',
+    scopes: ['mcp.tools', 'compta.read', 'compta.prepare', 'compta.execute'],
     syncCount: 0,
     syncHistory: [],
   },

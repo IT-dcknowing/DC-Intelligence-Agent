@@ -31,6 +31,10 @@ service cloud.firestore {
     match /users/{uid}/connections/{conn} {
       allow read, write: if false;
     }
+    // Vecteurs RAG : backend Admin SDK uniquement (jamais d'embeddings au navigateur).
+    match /knowledge_documents/{doc}/chunks/{chunk} {
+      allow read, write: if false;
+    }
     // Journal WhatsApp DC : écrit par le pipeline backend uniquement.
     match /wa_conversations/{doc} {
       allow read, write: if false;

@@ -33,6 +33,8 @@ import {
 import { ModelSelector } from './ModelSelector';
 import { WaveformVisualizer } from './WaveformVisualizer';
 import { transcribeAudioWithGroq } from '../services/voiceService';
+import { executeSoftwareTool } from '../services/mcpClient';
+import { logMcpCall } from '../services/auditLog';
 
 interface AssistantViewProps {
   sessions: ChatSession[];
@@ -86,6 +88,14 @@ export const AssistantView: React.FC<AssistantViewProps> = ({
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const [showAttachNotice, setShowAttachNotice] = useState(false);
   const [exportNotice, setExportNotice] = useState(false);
+
+  // Compta Flow MCP : prepare (PREPARE) puis commit (EXECUTE) par message.
+  // draftId + alertes serveur affichés inline, jamais simulés.
+  const [mcpBusy, setMcpBusy] = useState<Record<string, boolean>>({});
+  const [mcpDrafts, setMcpDrafts] = useState<
+    Record<string, { draftId: string; alertes: string[]; committed: boolean; commitRef?: string }>
+  >({});
+  const [mcpErrors, setMcpErrors] = useState<Record<string, string>>({});
 
   // Audio / Voice recording state
   const [voiceState, setVoiceState] = useState<VoiceState>('idle');
@@ -257,6 +267,109 @@ export const AssistantView: React.FC<AssistantViewProps> = ({
     navigator.clipboard.writeText(text);
     setCopiedMessageId(id);
     setTimeout(() => setCopiedMessageId(null), 2000);
+  };
+
+  const summarizeProposal = (p: any): string => {
+    if (!p) return '{}';
+    return JSON.stringify({
+      typePiece: p.typePiece,
+      tiers: p.tiers,
+      date: p.date,
+      reference: p.reference,
+      montantHT: p.montantHT,
+      montantTVA: p.montantTVA,
+      montantTTC: p.montantTTC,
+      journal: p.journal,
+      lignes: Array.isArray(p.ecriture) ? p.ecriture.length : 0,
+    });
+  };
+
+  // Étape 1 (PREPARE) : validation faisant foi côté Compta Flow -> draftId + alertes.
+  const handleMcpPrepare = async (msgId: string, proposal: any) => {
+    setMcpBusy((prev) => ({ ...prev, [msgId]: true }));
+    setMcpErrors((prev) => ({ ...prev, [msgId]: '' }));
+    try {
+      const res = await executeSoftwareTool({
+        software: 'Compta Flow',
+        toolName: 'prepare_ecriture',
+        arguments: { proposition: proposal },
+        permissionLevel: 'PREPARE',
+      });
+      logMcpCall({
+        agentName: 'Agent Comptabilité',
+        software: 'Compta Flow',
+        toolName: 'prepare_ecriture',
+        permission: 'PREPARE',
+        paramsSummary: summarizeProposal(proposal),
+        ok: res.success,
+        resultSummary: res.success ? JSON.stringify(res.data).slice(0, 500) : undefined,
+        error: res.success ? undefined : res.error,
+        executionTimeMs: res.executionTimeMs,
+      });
+      if (!res.success) {
+        setMcpErrors((prev) => ({
+          ...prev,
+          [msgId]: res.degraded
+            ? `Connecteur Compta Flow non configuré (${res.error}). Voir Connexions > Compta Flow MCP.`
+            : `Échec prepare_ecriture : ${res.error}`,
+        }));
+        return;
+      }
+      const data: any = res.data || {};
+      const draftId = String(data.draftId || data.id || '');
+      if (!draftId) {
+        setMcpErrors((prev) => ({ ...prev, [msgId]: 'Le serveur n’a retourné aucun draftId.' }));
+        return;
+      }
+      const alertes: string[] = Array.isArray(data.alertes) ? data.alertes.map(String) : [];
+      setMcpDrafts((prev) => ({ ...prev, [msgId]: { draftId, alertes, committed: false } }));
+    } finally {
+      setMcpBusy((prev) => ({ ...prev, [msgId]: false }));
+    }
+  };
+
+  // Étape 2 (EXECUTE) : écriture réelle, draftId + confirm:true explicite, anti-rejeu serveur.
+  const handleMcpCommit = async (msgId: string) => {
+    const draft = mcpDrafts[msgId];
+    if (!draft) return;
+    setMcpBusy((prev) => ({ ...prev, [msgId]: true }));
+    setMcpErrors((prev) => ({ ...prev, [msgId]: '' }));
+    try {
+      const res = await executeSoftwareTool({
+        software: 'Compta Flow',
+        toolName: 'commit_ecriture',
+        arguments: { draftId: draft.draftId, confirm: true },
+        permissionLevel: 'EXECUTE',
+      });
+      logMcpCall({
+        agentName: 'Agent Comptabilité',
+        software: 'Compta Flow',
+        toolName: 'commit_ecriture',
+        permission: 'EXECUTE',
+        paramsSummary: JSON.stringify({ draftId: draft.draftId, confirm: true }),
+        ok: res.success,
+        resultSummary: res.success ? JSON.stringify(res.data).slice(0, 500) : undefined,
+        error: res.success ? undefined : res.error,
+        executionTimeMs: res.executionTimeMs,
+      });
+      if (!res.success) {
+        setMcpErrors((prev) => ({ ...prev, [msgId]: `Échec commit_ecriture : ${res.error}` }));
+        return;
+      }
+      const data: any = res.data || {};
+      setMcpDrafts((prev) => ({
+        ...prev,
+        [msgId]: { ...draft, committed: true, commitRef: String(data.reference || data.ecritureId || draft.draftId) },
+      }));
+      createTask({
+        agentId: 'Agent Comptabilité',
+        action: 'EXECUTE',
+        input: `Écriture ${draft.draftId} validée serveur (Compta Flow MCP)`,
+        status: 'COMPLETED',
+      });
+    } finally {
+      setMcpBusy((prev) => ({ ...prev, [msgId]: false }));
+    }
   };
 
   const filteredSessions = sessions.filter((s) => {
@@ -713,43 +826,69 @@ export const AssistantView: React.FC<AssistantViewProps> = ({
                             </table>
                           </div>
 
+                          {/* Validation serveur Compta Flow (PREPARE -> EXECUTE, jamais simulé) */}
+                          {mcpErrors[msg.id] && (
+                            <div className="mt-3 p-3 rounded-lg bg-red-50 border border-red-200 text-[12px] text-red-800 leading-relaxed">
+                              {mcpErrors[msg.id]}
+                            </div>
+                          )}
+                          {mcpDrafts[msg.id] && !mcpDrafts[msg.id].committed && (
+                            <div className="mt-3 p-3 rounded-lg bg-emerald-50 border border-emerald-200 text-[12px] text-emerald-900 leading-relaxed">
+                              <div className="font-bold font-mono">draftId : {mcpDrafts[msg.id].draftId}</div>
+                              {mcpDrafts[msg.id].alertes.length > 0 ? (
+                                <div className="mt-1.5 space-y-1">
+                                  <div className="font-semibold">Alertes serveur (validation faisant foi) :</div>
+                                  {mcpDrafts[msg.id].alertes.map((a, i) => (
+                                    <div key={i}>⚠️ {a}</div>
+                                  ))}
+                                </div>
+                              ) : (
+                                <div className="mt-1">✅ Validation serveur sans alerte.</div>
+                              )}
+                            </div>
+                          )}
+                          {mcpDrafts[msg.id]?.committed && (
+                            <div className="mt-3 p-3 rounded-lg bg-black text-white text-[12px] leading-relaxed">
+                              ✅ Écriture comptabilisée côté Compta Flow — réf :{' '}
+                              <span className="font-mono font-bold">{mcpDrafts[msg.id].commitRef}</span>
+                            </div>
+                          )}
                           {/* Action Buttons (N1 Level Validation) */}
                           <div className="flex items-center gap-2 pt-1">
+                            {!mcpDrafts[msg.id] ? (
+                              <button
+                                type="button"
+                                onClick={() => handleMcpPrepare(msg.id, msg.proposal)}
+                                disabled={!!mcpBusy[msg.id]}
+                                className="flex-1 bg-black hover:bg-zinc-800 disabled:opacity-50 text-white text-xs font-semibold py-2 px-3 rounded-lg flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                              >
+                                <Check className="w-3.5 h-3.5" />
+                                {mcpBusy[msg.id] ? 'Vérification serveur…' : 'Vérifier côté Compta Flow'}
+                              </button>
+                            ) : !mcpDrafts[msg.id].committed ? (
+                              <button
+                                type="button"
+                                onClick={() => handleMcpCommit(msg.id)}
+                                disabled={!!mcpBusy[msg.id]}
+                                className="flex-1 bg-black hover:bg-zinc-800 disabled:opacity-50 text-white text-xs font-semibold py-2 px-3 rounded-lg flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                              >
+                                <Check className="w-3.5 h-3.5" />
+                                {mcpBusy[msg.id] ? 'Écriture en cours…' : 'Confirmer l’écriture (commit)'}
+                              </button>
+                            ) : (
+                              <span className="flex-1 text-center text-xs font-semibold text-emerald-700 py-2">
+                                Écriture traitée
+                              </span>
+                            )}
                             <button
                               type="button"
                               onClick={() => {
-                                const p = msg.proposal;
-                                const tiersName = p?.tiers || 'Tiers Client';
-                                const refPiece = p?.reference || 'ACH-2026-001';
-                                const journalCode = p?.journal || 'ACH';
-                                const amountTTC = p?.montantTTC || 0;
-
                                 createTask({
                                   agentId: 'Agent Comptabilité',
-                                  action: 'EXECUTE',
-                                  input: `Export écriture ${refPiece} (${tiersName} - ${amountTTC} FCFA) vers Google Sheets [Compta Flow - Journal 2026.gsheet]`,
-                                  status: 'COMPLETED',
+                                  action: 'PREPARE',
+                                  input: `Escalade expert : ${msg.proposal?.reference || msg.id} (${msg.proposal?.tiers || 'tiers à préciser'})`,
+                                  status: 'WAITING_USER',
                                 });
-
-                                alert(
-                                  `✅ CONFIRMATION D'INSERTION EN DIRECT DANS GOOGLE SHEETS :\n\n` +
-                                  `• Document Cible : Compta Flow - Journal 2026.gsheet\n` +
-                                  `• Feuille insérée : ${journalCode}_2026\n` +
-                                  `• Ligne insérée : Rangée #${Math.floor(Math.random() * 20) + 38}\n` +
-                                  `• N° Pièce : ${refPiece}\n` +
-                                  `• Tiers : ${tiersName}\n` +
-                                  `• Équilibre : Σ Débit = Σ Crédit = ${amountTTC.toLocaleString('fr-FR')} FCFA\n` +
-                                  `• Statut HTTP API : 200 OK (OAuth 2.0 Google Workspace actif)`
-                                );
-                              }}
-                              className="flex-1 bg-black hover:bg-gray-800 text-white text-xs font-semibold py-2 px-3 rounded-lg flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
-                            >
-                              <Check className="w-3.5 h-3.5" /> Confirmer & Exporter vers Sheets
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                alert(`Dossier escaladé vers l'expert-comptable référent.`);
                               }}
                               className="bg-white hover:bg-gray-50 border border-[#E5E5E7] text-gray-700 text-xs font-medium py-2 px-3 rounded-lg flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
                             >

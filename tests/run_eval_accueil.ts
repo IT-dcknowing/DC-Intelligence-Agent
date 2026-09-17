@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { routeUserRequest } from '../src/services/routerAgent';
-import { buildIdentityLockedPrompt } from '../src/services/llmService';
+import { buildAgentPrompt } from '../src/services/llmService';
 import { isFrustratedText } from '../src/services/storeApi';
 
 interface AccCase {
@@ -49,17 +49,27 @@ async function runAccueilEval() {
     }
   }
 
-  // Verrou d'identité : le prompt front ne doit jamais usurper l'identité spécialiste.
-  const locked = buildIdentityLockedPrompt('Base.', {
+  // Identité pilotée par la config : le prompt épouse l'agent réellement routé
+  // (base neutre, zéro libellé comptable codé en dur), avec garde anti-usurpation.
+  const promptCompta = buildAgentPrompt({
     name: 'Agent Comptabilité',
     role: 'Comptable',
     instructions: 'TVA 18%.',
   });
+  const promptAccueil = buildAgentPrompt({
+    name: 'Agent Accueil / Routeur Central',
+    role: 'Aiguilleur central',
+    instructions: 'Accueillir, qualifier, router.',
+  });
   const lockOk =
-    locked.includes('IDENTITÉ VERROUILLÉE') &&
-    locked.includes('Contexte d’expertise fourni par') &&
-    !locked.includes("Nom de l'agent:");
-  console.log(lockOk ? '  [LOCK] SUCCES — verrou identite front' : '  [LOCK] ECHEC — verrou identite front');
+    promptCompta.includes('Tu es « Agent Comptabilité »') &&
+    promptCompta.includes('TVA 18%.') &&
+    promptCompta.includes('ne prétends jamais') &&
+    !promptCompta.includes('SYSCOHADA') &&
+    !promptCompta.includes('401') &&
+    promptAccueil.includes('Tu es « Agent Accueil / Routeur Central »') &&
+    !promptAccueil.includes('SYSCOHADA');
+  console.log(lockOk ? '  [IDENTITY] SUCCES — identite suit le routage, base neutre' : '  [IDENTITY] ECHEC — identite front');
   if (lockOk) passed++;
 
   const total = cases.length + 1;
