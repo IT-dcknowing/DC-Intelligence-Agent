@@ -35,6 +35,7 @@ import { WaveformVisualizer } from './WaveformVisualizer';
 import { transcribeAudioWithGroq } from '../services/voiceService';
 import { executeSoftwareTool } from '../services/mcpClient';
 import { logMcpCall } from '../services/auditLog';
+import { getAccountingContext } from '../services/companyContextService';
 
 interface AssistantViewProps {
   sessions: ChatSession[];
@@ -96,6 +97,9 @@ export const AssistantView: React.FC<AssistantViewProps> = ({
     Record<string, { draftId: string; alertes: string[]; committed: boolean; commitRef?: string }>
   >({});
   const [mcpErrors, setMcpErrors] = useState<Record<string, string>>({});
+  // P0.4 Cycle de vie : PROPOSITION ≠ VALIDATION ≠ PRÉPARATION ≠ EXÉCUTION
+  const [proposalStatuses, setProposalStatuses] = useState<Record<string, string>>({});
+  const [proposalEdits, setProposalEdits] = useState<Record<string, boolean>>({});
 
   // Audio / Voice recording state
   const [voiceState, setVoiceState] = useState<VoiceState>('idle');
@@ -943,6 +947,36 @@ export const AssistantView: React.FC<AssistantViewProps> = ({
                           <FileSpreadsheet className="w-3.5 h-3.5" />
                         </button>
                       )}
+                      {/* P0.10 Carte métier détaillée : Statut + Contexte + Confiance + Sources */}
+                      {!isUser && msg.proposal && (() => {
+                        const ctx = getAccountingContext();
+                        const status = proposalStatuses[msg.id] || 'PROPOSED';
+                        const confiance = status === 'PROPOSED' ? (msg.validationResult?.ok ? 'HIGH' : 'MEDIUM') : 'LOW';
+                        return (
+                          <div className="mt-3 p-3 rounded-lg bg-[#F8FAFC] border border-[#E2E8F0] text-[11px] leading-relaxed">
+                            <div className="flex flex-wrap gap-2 mb-2">
+                              <span className="px-2 py-0.5 rounded-full bg-black text-white font-bold">Statut : {status}</span>
+                              <span className="px-2 py-0.5 rounded-full bg-white border border-[#E5E5E7]">Contexte : {ctx.contextStatus}</span>
+                              <span className="px-2 py-0.5 rounded-full bg-white border border-[#E5E5E7]">Confiance : {confiance}</span>
+                            </div>
+                            <div className="text-[#475569]">
+                              Sources : {(msg as any).sourcesRag?.length ? (msg as any).sourcesRag.join(', ') : 'Règles SYSCOHADA générales + Pièce fournie'}
+                              {ctx.contextStatus === 'GENERAL_ONLY' && ' • Votre plan comptable interne n\'est pas encore chargé — comptes à adapter.'}
+                            </div>
+                            {status === 'PROPOSED' && (
+                              <div className="flex gap-2 mt-2">
+                                <button type="button" onClick={() => setProposalEdits((p) => ({ ...p, [msg.id]: !p[msg.id] }))} className="px-2 py-1 rounded bg-white border border-[#E5E5E7] text-[11px]">Modifier</button>
+                                <button type="button" onClick={() => setProposalStatuses((p) => ({ ...p, [msg.id]: 'REJECTED' }))} className="px-2 py-1 rounded bg-red-50 border border-red-200 text-[11px] text-red-700">Refuser</button>
+                                <button type="button" onClick={() => setProposalStatuses((p) => ({ ...p, [msg.id]: 'APPROVED' }))} className="px-2 py-1 rounded bg-black text-white text-[11px]">Valider la proposition</button>
+                              </div>
+                            )}
+                            {status === 'APPROVED' && !mcpDrafts[msg.id] && !mcpErrors[msg.id] && (
+                              <div className="mt-2 text-[11px] font-semibold">Où souhaitez-vous enregistrer ? → Vérifier côté Compta Flow / Export TXT / Google Sheets</div>
+                            )}
+                            {status === 'REJECTED' && <div className="mt-2 text-red-700 font-semibold">Proposition refusée.</div>}
+                          </div>
+                        );
+                      })()}
                       {/* Copy Message Action Button */}
                       {!isUser && (
                         <button

@@ -49,6 +49,19 @@ service cloud.firestore {
     match /tool_calls/{doc} {
       allow read, write: if false;
     }
+    // Propositions comptables + exécutions + contextes : backend uniquement.
+    match /accounting_proposals/{doc} {
+      allow read, write: if false;
+    }
+    match /executions/{doc} {
+      allow read, write: if false;
+    }
+    match /accounting_contexts/{doc} {
+      allow read, write: if false;
+    }
+    match /connector_capabilities/{doc} {
+      allow read, write: if false;
+    }
     match /{document=**} {
       allow read, write: if false;
     }
