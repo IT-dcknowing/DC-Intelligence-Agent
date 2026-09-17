@@ -857,13 +857,31 @@ export const AssistantView: React.FC<AssistantViewProps> = ({
                               <span className="font-mono font-bold">{mcpDrafts[msg.id].commitRef}</span>
                             </div>
                           )}
+                          {/* Séparation stricte : PREPARATION ≠ EXECUTION — pas de prepare sans APPROVED */}
+                          {(() => {
+                            const st = proposalStatuses[msg.id] || 'PROPOSED';
+                            const canPrepare = st === 'APPROVED';
+                            return null;
+                          })()}
                           {/* Action Buttons (N1 Level Validation) */}
                           <div className="flex items-center gap-2 pt-1">
                             {!mcpDrafts[msg.id] ? (
                               <button
                                 type="button"
-                                onClick={() => handleMcpPrepare(msg.id, msg.proposal)}
-                                disabled={!!mcpBusy[msg.id]}
+                                onClick={() => {
+                                  const st = proposalStatuses[msg.id] || 'PROPOSED';
+                                  if (st !== 'APPROVED') {
+                                    setProposalStatuses((p) => ({ ...p, [msg.id]: 'APPROVED' }));
+                                  }
+                                  handleMcpPrepare(msg.id, msg.proposal);
+                                  setProposalStatuses((p) => ({ ...p, [msg.id]: 'PREPARED' }));
+                                }}
+                                disabled={!!mcpBusy[msg.id] || (proposalStatuses[msg.id] && proposalStatuses[msg.id] !== 'APPROVED' && proposalStatuses[msg.id] !== 'PROPOSED')}
+                                title={
+                                  (proposalStatuses[msg.id] || 'PROPOSED') !== 'APPROVED'
+                                    ? 'Valide d’abord la proposition (PROPOSED → APPROVED → PREPARED)'
+                                    : 'Lance la préparation côté Compta Flow (PREPARED)'
+                                }
                                 className="flex-1 bg-black hover:bg-zinc-800 disabled:opacity-50 text-white text-xs font-semibold py-2 px-3 rounded-lg flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
                               >
                                 <Check className="w-3.5 h-3.5" />
@@ -872,16 +890,37 @@ export const AssistantView: React.FC<AssistantViewProps> = ({
                             ) : !mcpDrafts[msg.id].committed ? (
                               <button
                                 type="button"
-                                onClick={() => handleMcpCommit(msg.id)}
+                                onClick={async () => {
+                                  await handleMcpCommit(msg.id);
+                                  setProposalStatuses((p) => ({ ...p, [msg.id]: 'EXECUTED' }));
+                                }}
                                 disabled={!!mcpBusy[msg.id]}
                                 className="flex-1 bg-black hover:bg-zinc-800 disabled:opacity-50 text-white text-xs font-semibold py-2 px-3 rounded-lg flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
                               >
                                 <Check className="w-3.5 h-3.5" />
                                 {mcpBusy[msg.id] ? 'Écriture en cours…' : 'Confirmer l’écriture (commit)'}
                               </button>
+                            ) : proposalStatuses[msg.id] !== 'VERIFIED' ? (
+                              <button
+                                type="button"
+                                onClick={async () => {
+                                  setMcpBusy((p) => ({ ...p, [msg.id]: true }));
+                                  try {
+                                    const r = await fetch('/api/accounting/proposals/' + encodeURIComponent(msg.id) + '/verify', { method: 'POST', headers: { 'Content-Type': 'application/json' } });
+                                    if (r.ok) setProposalStatuses((p) => ({ ...p, [msg.id]: 'VERIFIED' }));
+                                  } finally {
+                                    setMcpBusy((p) => ({ ...p, [msg.id]: false }));
+                                  }
+                                }}
+                                disabled={!!mcpBusy[msg.id]}
+                                className="flex-1 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-semibold py-2 px-3 rounded-lg flex items-center justify-center gap-1.5 cursor-pointer"
+                              >
+                                <Check className="w-3.5 h-3.5" />
+                                Vérifier (readback)
+                              </button>
                             ) : (
                               <span className="flex-1 text-center text-xs font-semibold text-emerald-700 py-2">
-                                Écriture traitée
+                                ✓ Vérifié — référence externe confirmée
                               </span>
                             )}
                             <button
