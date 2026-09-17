@@ -104,6 +104,8 @@ export const AgentList: React.FC<AgentListProps> = ({
           agents.map((agent) => {
             const isSelected = selectedAgentId === agent.id;
             const isActive = agent.status === 'actif';
+            const isEntry = Boolean(agent.isDefaultEntry || agent.isRouter);
+            const exchangeCount = agent.conversationsCount || 0;
 
             return (
               <div
@@ -157,6 +159,27 @@ export const AgentList: React.FC<AgentListProps> = ({
                       >
                         {agent.name}
                       </p>
+                      {/* Badges point d'entrée / défaut + statut */}
+                      <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                        {isEntry && (
+                          <>
+                            <span
+                              className="inline-flex items-center gap-1"
+                              style={{ fontSize: '10px', fontWeight: 700, padding: '1px 7px', background: '#09090B', color: '#fff', borderRadius: '99px' }}
+                              title="Toute nouvelle session démarre sur cet agent"
+                            >
+                              Point d’entrée
+                            </span>
+                            <span
+                              className="inline-flex items-center gap-1"
+                              style={{ fontSize: '10px', fontWeight: 600, padding: '1px 7px', background: '#fff', color: '#09090B', border: '1px solid #09090B', borderRadius: '99px' }}
+                              title="Agent actif par défaut"
+                            >
+                              Par défaut
+                            </span>
+                          </>
+                        )}
+                      </div>
                       {/* Monochrome status badge */}
                       <div className="flex items-center gap-1.5 mt-0.5">
                         <span
@@ -221,17 +244,18 @@ export const AgentList: React.FC<AgentListProps> = ({
                   </span>
                   <span
                     className="font-mono shrink-0"
+                    title="Nombre d'échanges réels traités par cet agent (calculé, jamais saisi)"
                     style={{
                       fontSize: '11px',
-                      fontWeight: 500,
-                      color: '#71717A',
-                      background: '#F4F4F5',
+                      fontWeight: 700,
+                      color: exchangeCount > 0 ? '#fff' : '#A1A1AA',
+                      background: exchangeCount > 0 ? '#09090B' : '#F4F4F5',
                       border: '1px solid #E5E5E7',
                       borderRadius: '99px',
                       padding: '1px 8px',
                     }}
                   >
-                    {agent.conversationsCount || 0} échanges
+                    {exchangeCount} échange{exchangeCount > 1 ? 's' : ''} réel{exchangeCount > 1 ? 's' : ''}
                   </span>
                 </div>
               </div>

@@ -8,6 +8,7 @@ import { AgentDetail } from './components/AgentDetail';
 import { KnowledgeBaseView } from './components/KnowledgeBaseView';
 import { SettingsView } from './components/SettingsView';
 import { AddModelModal } from './components/AddModelModal';
+import { AgentCreateModal, NewAgentDraft } from './components/AgentCreateModal';
 import { ToastContainer } from './components/ToastContainer';
 import { AuditLogView } from './components/AuditLogView';
 import { TaskMonitorView } from './components/TaskMonitorView';
@@ -37,7 +38,19 @@ import {
   INITIAL_CHAT_SESSIONS,
   INITIAL_INTEGRATIONS,
   INITIAL_KNOWLEDGE,
+  ACCUEIL_CANONICAL,
+  SPECIALIST_PROMPT_FINGERPRINTS,
 } from './mockData';
+
+// Point d'entrée unique de la plateforme : toute nouvelle session démarre sur
+// l'Agent d'Accueil. Un seul agent porte isDefaultEntry (repli : isRouter, puis [0]).
+export function getDefaultEntryAgent(list: Agent[]): Agent {
+  return (
+    list.find((a) => a.isDefaultEntry) ||
+    list.find((a) => a.isRouter) ||
+    list[0]
+  );
+}
 import {
   REAL_DEFAULT_MODELS,
   DEFAULT_MODEL,
@@ -168,10 +181,11 @@ export default function App() {
     }
   }, [integrations]);
 
-  // Agents state
+  // Agents state — la sélection démarre sur le point d'entrée (Accueil), jamais
+  // directement sur un spécialiste (Comptabilité, etc.).
   const [agents, setAgents] = useState<Agent[]>(INITIAL_AGENTS);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(
-    INITIAL_AGENTS[0]?.id || null
+    getDefaultEntryAgent(INITIAL_AGENTS)?.id || null
   );
 
   // Knowledge base state
@@ -273,14 +287,35 @@ export default function App() {
     hydratedRef.current = true;
     (async () => {
       // ---- Agents (merge : backend gagne, seed si vide) ----
+      // Auto-réparation : si le prompt distant du point d'entrée porte la
+      // signature d'un prompt spécialiste (écrasement historique), on restaure
+      // le canonique AQQR et on persiste la réparation.
+      const isSpecialistContamination = (instructions?: string) =>
+        typeof instructions === 'string' &&
+        SPECIALIST_PROMPT_FINGERPRINTS.some((fp) => instructions.includes(fp));
       try {
         const remoteAgents = await fetchAgents();
         if (remoteAgents && remoteAgents.length > 0) {
           const byId = new Map(remoteAgents.map((a) => [a.id, a]));
           setAgents((prev) => {
-            const merged = prev.map((a) =>
-              byId.has(a.id) ? { ...a, ...byId.get(a.id), id: a.id, conversationsCount: 0 } : a
-            );
+            const merged = prev.map((a) => {
+              if (!byId.has(a.id)) return a;
+              const remote = byId.get(a.id) as Agent;
+              const next: Agent = { ...a, ...remote, id: a.id, conversationsCount: 0 };
+              const isEntry = Boolean(next.isDefaultEntry || next.isRouter);
+              if (isEntry && isSpecialistContamination(next.instructions)) {
+                next.role = ACCUEIL_CANONICAL.role;
+                next.goal = ACCUEIL_CANONICAL.goal;
+                next.instructions = ACCUEIL_CANONICAL.instructions;
+                persistAgent(next).catch(() => {});
+              }
+              // Le drapeau point d'entrée survit au merge même si le backend l'ignore.
+              if ((a.isDefaultEntry || a.isRouter) && !next.isDefaultEntry) {
+                next.isDefaultEntry = true;
+                persistAgent(next).catch(() => {});
+              }
+              return next;
+            });
             const prevIds = new Set(prev.map((a) => a.id));
             const extra = remoteAgents.filter((a) => !prevIds.has(a.id));
             return extra.length ? [...merged, ...extra] : merged;
@@ -391,6 +426,9 @@ export default function App() {
 
     setChatSessions((prev) => [newSession, ...prev]);
     setSelectedSessionId(newSession.id);
+    // Règle métier : toute nouvelle session démarre sur l'Agent d'Accueil.
+    const entry = getDefaultEntryAgent(agents);
+    if (entry) setSelectedAgentId(entry.id);
     addToast('success', 'Nouvelle session créée', 'Posez votre question ou dictez votre facture.');
     return newSession.id;
   };
@@ -440,16 +478,19 @@ export default function App() {
       postUserSignal('frustration').catch(() => {});
     }
 
-    // Multimodal Classification & Auto-Routing
+    // Multimodal Classification & Auto-Routing : routeUserRequest est invoqué
+    // à chaque envoi ; hors périmètre accueil, on bascule vers le spécialiste.
     const multimodalRes = await classifyAndExtractMultimodalInput({ text });
     const routingRes = routeUserRequest(text, multimodalRes);
 
-    // If routing suggests another agent, switch selectedAgentId automatically
-    if (routingRes.targetAgentId && routingRes.targetAgentId !== selectedAgentId) {
-      setSelectedAgentId(routingRes.targetAgentId);
-    }
+    const targetAgent =
+      agents.find((a) => a.id === routingRes.targetAgentId) ||
+      getDefaultEntryAgent(agents);
 
-    const targetAgent = agents.find((a) => a.id === (routingRes.targetAgentId || selectedAgentId)) || agents[0];
+    // L'UI suit l'agent réellement routé (jamais un spécialiste direct sans routage).
+    if (targetAgent.id !== selectedAgentId) {
+      setSelectedAgentId(targetAgent.id);
+    }
     // Note : les compteurs d'échanges sont calculés depuis les messages persistés
     // (agentsWithCounts), jamais incrémentés à la main.
 
@@ -510,7 +551,9 @@ export default function App() {
         return;
       }
 
-      const activeAgent = agents.find((a) => a.id === selectedAgentId) || agents[0];
+      // Anti-crise d'identité : le contexte suit le routage FRAIS (targetAgent),
+      // jamais le selectedAgentId périmé (setState asynchrone = tour précédent).
+      const activeAgent = targetAgent;
 
       const aiResponseContent = await generateChatResponse({
         model: modelObj,
@@ -796,21 +839,31 @@ export default function App() {
     setAgents((prev) => prev.map((a) => (a.id === agentId ? updated : a)));
   };
 
-  const handleCreateNewAgent = () => {
+  // Création via formulaire structuré : le Prompt Système est obligatoire,
+  // un agent n'est jamais créé "au hasard". Jamais point d'entrée par défaut.
+  const [isNewAgentModalOpen, setIsNewAgentModalOpen] = useState<boolean>(false);
+
+  const handleCreateAgent = (draft: NewAgentDraft) => {
     const newId = `agent-${Date.now()}`;
     const newAgent: Agent = {
       id: newId,
-      name: 'Agent Audit & Règlements',
-      description: 'Supervise les écarts de trésorerie et applique les règles SYSCOHADA.',
+      name: draft.name,
+      description: draft.description || 'Agent spécialisé DC Intelligence.',
       status: 'actif',
-      goal: 'Détecter les anomalies dans les écritures de trésorerie.',
-      role: 'Superviseur Trésorerie SYSCOHADA',
-      instructions: '# Règles opérationnelles\n1. Rapprocher les lignes du journal de banque 521.\n2. Contrôler les agios et commissions.',
+      goal: draft.goal,
+      role: draft.role,
+      instructions: draft.instructions,
+      allowedActions: draft.allowedActions,
+      allowedChannels: draft.allowedChannels.length > 0 ? draft.allowedChannels : ['web'],
+      isDefaultEntry: false,
       conversationsCount: 0,
     };
-    persistAgent(newAgent).catch(() => {});
+    persistAgent(newAgent).catch(() => {
+      addToast('warning', 'Sauvegarde locale uniquement', 'Le serveur est injoignable, réessayez plus tard.');
+    });
     setAgents((prev) => [newAgent, ...prev]);
     setSelectedAgentId(newId);
+    setIsNewAgentModalOpen(false);
     addToast('success', 'Nouvel agent créé', `${newAgent.name} prêt à être configuré.`);
   };
 
@@ -979,7 +1032,7 @@ export default function App() {
               selectedAgentId={selectedAgentId}
               onSelectAgent={setSelectedAgentId}
               onToggleStatus={handleToggleAgentStatus}
-              onNewAgent={handleCreateNewAgent}
+              onNewAgent={() => setIsNewAgentModalOpen(true)}
             />
             <AgentDetail agent={selectedAgent} onUpdateAgent={handleUpdateAgent} />
           </div>
@@ -1023,6 +1076,13 @@ export default function App() {
         isOpen={isAddModelModalOpen}
         onClose={() => setIsAddModelModalOpen(false)}
         onAddModel={handleAddModel}
+      />
+
+      {/* Create New Agent Modal (formulaire structuré, prompt système obligatoire) */}
+      <AgentCreateModal
+        isOpen={isNewAgentModalOpen}
+        onClose={() => setIsNewAgentModalOpen(false)}
+        onCreate={handleCreateAgent}
       />
 
       {/* Toast Notifications Container */}

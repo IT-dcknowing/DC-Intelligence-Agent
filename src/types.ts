@@ -137,6 +137,9 @@ export interface Agent {
   instructions: string;
   conversationsCount: number;
   isRouter?: boolean;
+  // Point d'entrée par défaut de la plateforme (Agent d'Accueil).
+  // Toute nouvelle session démarre dessus ; un seul agent doit porter ce drapeau.
+  isDefaultEntry?: boolean;
   associatedSoftware?: 'Compta Flow' | 'Legal Flow' | 'RECO' | 'Orchestrateur Central';
   allowedActions?: ActionPermission[];
   allowedChannels?: ChannelType[];

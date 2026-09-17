@@ -2,6 +2,23 @@ import { Agent, ApiKeyConfig, ChatSession, Conversation, KnowledgeDocument, LLMM
 
 export const INITIAL_CONVERSATIONS: Conversation[] = [];
 
+// Prompt système canonique de l'Agent d'Accueil (AQQR : Accueillir, Qualifier,
+// Router, Rassurer). Ne contient JAMAIS d'imputation comptable ni de SYSCOHADA :
+// l'Accueil n'exécute aucune logique métier, il oriente vers les spécialistes.
+export const ACCUEIL_CANONICAL = {
+  role: 'Aiguilleur central & classificateur d’intentions',
+  goal: 'Accueillir et aiguiller avec précision les requêtes multimodales vers le bon agent spécialisé de l’écosystème DC-KNOWING.',
+  instructions:
+    'Tu es l’Agent d’Accueil DC Intelligence, point d’entrée unique de la plateforme.\n' +
+    '1. ACCUEILLIR : salue brièvement et mets en confiance, sans jargon.\n' +
+    '2. QUALIFIER : identifie l’utilisateur, la société et l’intention (Facture -> Compta, Avis/Courrier -> Legal, Relevé -> Reco). Demande une clarification si c’est ambigu.\n' +
+    '3. ROUTER : passe le relais à l’agent spécialisé concerné. Tu n’exécutes JAMAIS toi-même la logique métier (ni écritures, ni calculs, ni déclarations).\n' +
+    '4. RASSURER : confirme ce qui va se passer et le délai. Si tu ne sais pas, dis-le et propose l’escalade vers un humain.',
+};
+
+// Signature d'un prompt spécialiste égaré sur l'Accueil (auto-réparation au merge).
+export const SPECIALIST_PROMPT_FINGERPRINTS = ['RÈGLES NON NÉGOCIABLES', 'Σ DÉBITS', 'imputation comptable'];
+
 export const INITIAL_AGENTS: Agent[] = [
   {
     id: 'agent-router',
@@ -9,12 +26,13 @@ export const INITIAL_AGENTS: Agent[] = [
     description: 'Point d’entrée principal de DC INTELLIGENCE. Identifie l’utilisateur, qualifie l’intention et oriente vers l’agent spécialisé.',
     status: 'actif',
     isRouter: true,
+    isDefaultEntry: true,
     associatedSoftware: 'Orchestrateur Central',
     allowedActions: ['READ', 'RECOMMEND'],
     allowedChannels: ['whatsapp', 'web', 'phone'],
-    goal: 'Accueillir et aiguiller avec précision les requêtes multimodales vers le bon agent spécialisé de l’écosystème DC-KNOWING.',
-    role: 'Aiguilleur central & classificateur d’intentions',
-    instructions: '1. Identifier l’utilisateur et la société.\n2. Qualifier l’intention et le type de document (Facture -> Compta, Avis -> Legal, Relevé -> Reco).\n3. Demander une clarification si l’intention est ambiguë.\n4. Passer le relais à l’agent spécialisé sans exécuter la logique métier complexe soi-même.',
+    goal: ACCUEIL_CANONICAL.goal,
+    role: ACCUEIL_CANONICAL.role,
+    instructions: ACCUEIL_CANONICAL.instructions,
     conversationsCount: 0,
   },
   {

@@ -1829,6 +1829,7 @@ function sanitizeAgent(a) {
     role: str(a.role, 200),
     instructions: str(a.instructions, 8000),
     isRouter: Boolean(a.isRouter),
+    isDefaultEntry: Boolean(a.isDefaultEntry),
     associatedSoftware: str(a.associatedSoftware, 60),
     allowedActions: actions,
     allowedChannels: channels,
