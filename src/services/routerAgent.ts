@@ -63,9 +63,9 @@ export function routeUserRequest(
     };
   }
 
-  // Domaine Comptabilité
+  // Domaine Comptabilité (« agent comptable » doit router explicitement, pas par défaut)
   if (
-    /\b(compta|facture|écriture|ecriture|syscohada|ht|tva|ttc|601|401|411|achat|vente|journal|imputation)\b/.test(
+    /\b(compta|comptables?|facture|écriture|ecriture|syscohada|ht|tva|ttc|601|401|411|achat|vente|journal|imputation)\b/.test(
       text
     )
   ) {

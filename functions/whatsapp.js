@@ -157,7 +157,7 @@ function routeText(text) {
   if (/\b(imf|ifu|rccm)\b/.test(t)) {
     return { domain: 'JURIDIQUE_FISCAL', agent: 'legal', confidence: 0.85 };
   }
-  if (/\b(facture|achat|fournisseur|ttc|tva|601|401|bilan|écriture|ecriture|syscohada|compta|salaire|paie)\b/.test(t)) {
+  if (/\b(facture|achat|fournisseur|ttc|tva|601|401|bilan|écriture|ecriture|syscohada|compta|comptables?|salaire|paie)\b/.test(t)) {
     return { domain: 'COMPTABILITÉ', agent: 'compta', confidence: 0.85 };
   }
   if (/\b(rapprochement|relevé|releve|banque|ecobank|sgbci|bicici|pointage|solde|521|écart|ecart|virement|lettrage)\b/.test(t)) {
