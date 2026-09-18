@@ -11,6 +11,7 @@
     "lint": "tsc --noEmit",
     "test": "tsx tests/run_eval.ts",
     "test:accueil": "tsx tests/run_eval_accueil.ts",
+    "test:e2e": "playwright test",
     "test:compta-mcp": "tsx tests/run_eval_compta_mcp.ts",
     "test:rag": "tsx tests/run_eval_rag.ts",
     "typecheck": "tsc --noEmit"
@@ -28,6 +29,7 @@
     "vite": "^6.2.3"
   },
   "devDependencies": {
+    "@playwright/test": "^1.63.0",
     "@types/express": "^4.17.21",
     "@types/node": "^22.14.0",
     "autoprefixer": "^10.4.21",
