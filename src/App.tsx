@@ -493,17 +493,19 @@ export default function App() {
     addToast('success', 'Session renommée', `Nouveau titre : ${newTitle}`);
   };
 
-  const handleSendMessage = async (sessionId: string, text: string) => {
+  const handleSendMessage = async (sessionId: string, text: string, file?: File) => {
     const now = new Date();
     const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(
       now.getMinutes()
     ).padStart(2, '0')}`;
 
+    const displayContent = file ? (text ? `${text}\n[📎 ${file.name}]` : `📎 ${file.name}`) : text;
+
     const userMsg: ChatMessage = {
       id: `msg-${Date.now()}`,
       sender: 'user',
       senderName: 'Vous',
-      content: text,
+      content: displayContent,
       timestamp: timeStr,
     };
 
@@ -515,7 +517,8 @@ export default function App() {
 
     // Multimodal Classification & Auto-Routing : routeUserRequest est invoqué
     // à chaque envoi ; hors périmètre accueil, on bascule vers le spécialiste.
-    const multimodalRes = await classifyAndExtractMultimodalInput({ text });
+    // Support fichier réel (image/PDF) via VLM backend, sinon heuristique.
+    const multimodalRes = await classifyAndExtractMultimodalInput({ text, file });
     const routingRes = routeUserRequest(text, multimodalRes);
 
     const entryAgent = getDefaultEntryAgent(agents);
@@ -538,7 +541,7 @@ export default function App() {
       action: (needsDelegation
         ? targetAgent.allowedActions && targetAgent.allowedActions[0]
         : visibleAgent.allowedActions && visibleAgent.allowedActions[0]) || 'PREPARE',
-      input: text,
+      input: displayContent,
       status: 'RUNNING',
     });
 
@@ -547,9 +550,10 @@ export default function App() {
 
     // 1. Update session immediately with user message (+ persistance Firestore immédiate)
     const currentSession = chatSessions.find((s) => s.id === sessionId);
+    const titleText = text || (file ? file.name : '');
     const isDefaultTitle = currentSession?.title.startsWith('Nouvelle session');
     const nextTitle = isDefaultTitle
-      ? text.slice(0, 32) + (text.length > 32 ? '...' : '')
+      ? titleText.slice(0, 32) + (titleText.length > 32 ? '...' : '')
       : currentSession?.title;
     if (isDefaultTitle && nextTitle) {
       renameSessionRemote(sessionId, nextTitle).catch(() => {});
@@ -557,7 +561,7 @@ export default function App() {
     appendMessageRemote(sessionId, {
       sender: 'user',
       senderName: 'Vous',
-      content: text,
+      content: displayContent,
       agentName: targetAgent.name,
     }).catch(() => {});
     setChatSessions((prev) =>
@@ -566,7 +570,7 @@ export default function App() {
           return {
             ...s,
             title: nextTitle || s.title,
-            lastMessage: text,
+            lastMessage: displayContent,
             lastMessageTime: timeStr,
             messages: [...s.messages, userMsg],
           };

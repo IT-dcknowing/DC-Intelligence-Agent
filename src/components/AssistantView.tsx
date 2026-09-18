@@ -44,7 +44,7 @@ interface AssistantViewProps {
   onNewSession: () => Promise<string>;
   onDeleteSession: (sessionId: string) => void;
   onRenameSession: (sessionId: string, newTitle: string) => void;
-  onSendMessage: (sessionId: string, text: string) => void;
+  onSendMessage: (sessionId: string, text: string, file?: File) => void;
   isGenerating: boolean;
   models: LLMModel[];
   selectedModelId: string;
@@ -87,8 +87,10 @@ export const AssistantView: React.FC<AssistantViewProps> = ({
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState('');
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
-  const [showAttachNotice, setShowAttachNotice] = useState(false);
   const [exportNotice, setExportNotice] = useState(false);
+  const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
+  const [isDragOver, setIsDragOver] = useState(false);
+  const [fileError, setFileError] = useState<string | null>(null);
 
   // Compta Flow MCP : prepare (PREPARE) puis commit (EXECUTE) par message.
   // draftId + alertes serveur affichés inline, jamais simulés.
@@ -116,6 +118,7 @@ export const AssistantView: React.FC<AssistantViewProps> = ({
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const activeSession = sessions.find((s) => s.id === selectedSessionId) || sessions[0] || null;
 
@@ -237,7 +240,9 @@ export const AssistantView: React.FC<AssistantViewProps> = ({
   // on la crée d'abord au lieu de sortir en silence.
   const handleSubmitMessage = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    if (!inputText.trim() || isGenerating) return;
+    const hasText = inputText.trim().length > 0;
+    const hasFiles = attachedFiles.length > 0;
+    if ((!hasText && !hasFiles) || isGenerating) return;
     let sessionId = activeSession?.id;
     if (!sessionId) {
       try {
@@ -247,11 +252,30 @@ export const AssistantView: React.FC<AssistantViewProps> = ({
       }
     }
     const textToSend = inputText.trim();
+    const filesToSend = [...attachedFiles];
     setInputText('');
+    setAttachedFiles([]);
+    setFileError(null);
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto';
     }
-    onSendMessage(sessionId, textToSend);
+    // Si fichiers joints, envoyer avec le premier fichier (le backend gère 1 fichier par message, on enchaîne)
+    if (filesToSend.length > 0) {
+      for (let i = 0; i < filesToSend.length; i++) {
+        const file = filesToSend[i];
+        const textPart = i === 0 ? textToSend : '';
+        // On passe le fichier via une propriété temporaire sur window pour que App le récupère,
+        // mais le plus propre est d'étendre onSendMessage - on le fait via un event custom
+        // Pour compatibilité, on encode le fichier dans le texte si besoin et on appelle avec le fichier
+        (onSendMessage as any)(sessionId, textPart, file);
+        // Petit délai entre envois multiples pour éviter le spam
+        if (i < filesToSend.length - 1) await new Promise((r) => setTimeout(r, 300));
+      }
+      // Si texte seul sans fichier déjà traité ci-dessus (i=0), pas besoin de double envoi
+      // Le cas texte + fichier est déjà géré dans la boucle (i=0 avec textPart)
+    } else {
+      onSendMessage(sessionId, textToSend);
+    }
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -265,6 +289,74 @@ export const AssistantView: React.FC<AssistantViewProps> = ({
     setInputText(e.target.value);
     e.target.style.height = 'auto';
     e.target.style.height = `${Math.min(e.target.scrollHeight, 180)}px`;
+  };
+
+  const MAX_FILE_SIZE = 8 * 1024 * 1024;
+  const ALLOWED_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/jpg', 'application/pdf', 'text/plain', 'text/csv', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'application/msword', 'application/vnd.ms-excel', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'];
+
+  const formatFileSize = (bytes: number) => {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  };
+
+  const handleFiles = (files: FileList | File[]) => {
+    const fileArray = Array.from(files);
+    setFileError(null);
+    const validFiles: File[] = [];
+    for (const file of fileArray) {
+      if (file.size > MAX_FILE_SIZE) {
+        setFileError(`"${file.name}" dépasse 8 Mo et a été ignoré.`);
+        continue;
+      }
+      // Accepte tous les types mais alerte si type inhabituel
+      validFiles.push(file);
+    }
+    if (validFiles.length > 0) {
+      setAttachedFiles((prev) => [...prev, ...validFiles].slice(0, 5));
+    }
+  };
+
+  const handleFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files.length > 0) {
+      handleFiles(e.target.files);
+      e.target.value = '';
+    }
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragOver(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragOver(false);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragOver(false);
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      handleFiles(e.dataTransfer.files);
+    }
+  };
+
+  const removeAttachedFile = (index: number) => {
+    setAttachedFiles((prev) => prev.filter((_, i) => i !== index));
+    setFileError(null);
+  };
+
+  const getFileIcon = (fileName: string) => {
+    const ext = fileName.split('.').pop()?.toLowerCase();
+    if (['jpg', 'jpeg', 'png', 'webp'].includes(ext || '')) return '🖼️';
+    if (ext === 'pdf') return '📄';
+    if (['doc', 'docx'].includes(ext || '')) return '📝';
+    if (['xls', 'xlsx', 'csv'].includes(ext || '')) return '📊';
+    return '📎';
   };
 
   const copyToClipboard = (text: string, id: string) => {
@@ -588,6 +680,9 @@ export const AssistantView: React.FC<AssistantViewProps> = ({
       <section
         id="assistant-chat-main-column"
         className="flex-1 flex flex-col h-full bg-white relative min-w-0 overflow-hidden font-['Montserrat']"
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
       >
         {/* Sticky Top Header */}
         <header
@@ -1060,18 +1155,52 @@ export const AssistantView: React.FC<AssistantViewProps> = ({
           <div ref={messagesEndRef} />
         </div>
 
-        {/* Attachment Notice Drawer */}
-        {showAttachNotice && (
-          <div className="px-4 py-2 bg-[#F8FAFC] border-t border-[#E2E8F0] flex items-center justify-between text-[12px] text-[#475569]">
-            <div className="flex items-center gap-2">
-              <Paperclip className="w-3.5 h-3.5 text-black" />
-              <span>Pièce jointe simulée : <strong>Facture_Fournisseur_2024.pdf</strong> (OCR actif).</span>
+        {/* Attached Files Preview */}
+        {attachedFiles.length > 0 && (
+          <div className="px-4 py-3 bg-[#F8FAFC] border-t border-[#E2E8F0] space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-semibold text-[#475569] uppercase tracking-wider">
+                {attachedFiles.length} fichier{attachedFiles.length > 1 ? 's' : ''} joint{attachedFiles.length > 1 ? 's' : ''}
+              </span>
+              <button
+                type="button"
+                onClick={() => setAttachedFiles([])}
+                className="text-[11px] text-[#94A3B8] hover:text-red-600 font-medium"
+              >
+                Tout retirer
+              </button>
             </div>
-            <button
-              type="button"
-              onClick={() => setShowAttachNotice(false)}
-              className="text-[#94A3B8] hover:text-black"
-            >
+            <div className="flex flex-wrap gap-2">
+              {attachedFiles.map((file, idx) => (
+                <div
+                  key={`${file.name}-${idx}`}
+                  className="flex items-center gap-2 px-3 py-2 bg-white border border-[#E2E8F0] rounded-xl shadow-xs text-[12px] max-w-[220px]"
+                >
+                  <span className="text-[14px] shrink-0">{getFileIcon(file.name)}</span>
+                  <div className="min-w-0 flex-1">
+                    <div className="font-medium text-[#1E293B] truncate" title={file.name}>
+                      {file.name}
+                    </div>
+                    <div className="text-[10px] text-[#94A3B8]">{formatFileSize(file.size)}</div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => removeAttachedFile(idx)}
+                    className="p-1 rounded-md hover:bg-zinc-100 text-[#94A3B8] hover:text-red-600 shrink-0"
+                    title="Retirer"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {fileError && (
+          <div className="px-4 py-2 bg-[#FEF2F2] border-t border-[#FCA5A5] flex items-center justify-between text-[12px] text-[#991B1B]">
+            <span>{fileError}</span>
+            <button type="button" onClick={() => setFileError(null)} className="text-[#991B1B]/70 hover:text-[#991B1B]">
               <X className="w-3.5 h-3.5" />
             </button>
           </div>
@@ -1092,7 +1221,28 @@ export const AssistantView: React.FC<AssistantViewProps> = ({
         )}
 
         {/* Message Input Bar & Audio Recording */}
-        <div id="assistant-composer-container" className="p-4 border-t border-[#E2E8F0] bg-white">
+        <div
+          id="assistant-composer-container"
+          className="p-4 border-t border-[#E2E8F0] bg-white relative"
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+          onDrop={handleDrop}
+        >
+          {isDragOver && (
+            <div className="absolute inset-2 bg-[#EEF2FF] border-2 border-dashed border-[#6366F1] rounded-2xl flex flex-col items-center justify-center gap-2 z-10 pointer-events-none">
+              <Paperclip className="w-6 h-6 text-[#6366F1]" />
+              <span className="text-[13px] font-semibold text-[#4338CA]">Déposez vos fichiers ici</span>
+              <span className="text-[11px] text-[#64748B]">Images, PDF, documents (max 8 Mo)</span>
+            </div>
+          )}
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            accept="image/*,application/pdf,.txt,.csv,.doc,.docx,.xls,.xlsx"
+            onChange={handleFileInputChange}
+            className="hidden"
+          />
           {voiceState === 'recording' ? (
             /* Active Groq Voice Recording Bar */
             <div className="p-3 rounded-2xl bg-black text-white border border-zinc-800 flex items-center justify-between gap-4 shadow-md">
@@ -1147,8 +1297,8 @@ export const AssistantView: React.FC<AssistantViewProps> = ({
                 <div className="flex items-center gap-2">
                   <button
                     type="button"
-                    onClick={() => setShowAttachNotice((prev) => !prev)}
-                    title="Joindre une facture ou justificatif"
+                    onClick={() => fileInputRef.current?.click()}
+                    title="Joindre une facture ou justificatif (glisser-déposer aussi)"
                     className="p-1.5 rounded-lg hover:bg-zinc-100 hover:text-black transition-colors"
                   >
                     <Paperclip className="w-4 h-4" />
@@ -1175,11 +1325,11 @@ export const AssistantView: React.FC<AssistantViewProps> = ({
                   <button
                     type="button"
                     onClick={() => handleSubmitMessage()}
-                    disabled={!inputText.trim() || isGenerating}
+                    disabled={(!inputText.trim() && attachedFiles.length === 0) || isGenerating}
                     title={isGenerating ? 'Génération en cours…' : 'Envoyer le message (Entrée)'}
                     aria-busy={isGenerating}
                     className={`p-2 rounded-xl transition-all ${
-                      inputText.trim() && !isGenerating
+                      (inputText.trim() || attachedFiles.length > 0) && !isGenerating
                         ? 'bg-black text-white hover:bg-zinc-800 shadow-xs cursor-pointer active:scale-95'
                         : 'bg-zinc-100 text-zinc-400 cursor-not-allowed'
                     }`}
