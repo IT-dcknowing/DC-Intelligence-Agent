@@ -289,23 +289,80 @@ const NEUTRAL_BASE =
 
 export function buildAgentPrompt(agentContext?: AgentContextShape, opts?: { specialistContext?: AgentContextShape }): string {
   const specialist = opts?.specialistContext;
+  // Mémoire : l'historique (4-8 derniers messages) est injecté par l'appelant (App/Functions)
+  // via `history` — jamais via le prompt statique. Le prompt liste les CAPACITÉS disponibles.
+  const toolsLine = agentContext?.instructions?.includes('delegate_to_')
+    ? ''
+    : ' Capacités de délégation (via outils) : delegate_to_compta (SYSCOHADA), delegate_to_juridique (CGI/articles/sanctions), delegate_to_reco (521/rapprochement), ask_clarification, answer_directly.';
   // Cas 1 : pas de délégation → Accueil parle en son nom (AQQR).
   if (!specialist) {
     const base = agentContext
       ? `Tu es DC Intelligence, incarné par « ${agentContext.name} » (${agentContext.role}). ${agentContext.instructions}`
       : NEUTRAL_BASE;
     return (
-      `${base} Règle d'identité : tu restes DC Intelligence du premier au dernier message. ` +
+      `${base}${toolsLine} Règle d'identité : tu restes DC Intelligence du premier au dernier message. ` +
       `Tu ne dis jamais « je suis l'Agent Comptabilité/Juridique/Reco ».`
     );
   }
-  // Cas 2 : délégation → DC reste la voix, l'expertise spécialiste est une source interne anonyme.
+  // Cas 2 : délégation → DC restitue l'expertise spécialiste, sans jamais révéler l'agent.
   return (
     `Tu es DC Intelligence, interlocuteur unique du client. ` +
     `Tu disposes de l'expertise suivante à restituer : ${specialist.instructions} ` +
     `Consigne stricte : ne révèle JAMAIS l'existence d'agents internes, de relais ou de retours (« agent comptable », « j'ai demandé à... », « il me revient que... » sont interdits). ` +
     `Présente la réponse comme tienne, ou avec une formule neutre (« Laissez-moi vérifier... », « Voici ce que j'ai trouvé... »), ne simule pas de consultation si le résultat est vide.`
   );
+}
+
+export interface AccueilDelegationDecision {
+  action: 'delegate_to_compta' | 'delegate_to_juridique' | 'delegate_to_reco' | 'ask_clarification' | 'answer_directly';
+  reason?: string;
+  clarificationQuestion?: string;
+  confidence: number;
+}
+
+const ACCUEIL_TOOLS_SPEC = `
+Outils dont tu disposes (tu DOIS en appeler UN par tour dès que l'intention est claire) :
+- delegate_to_compta(reason): compta SYSCOHADA (factures, HT/TVA, écritures, journaux, 706/401/411)
+- delegate_to_juridique(reason): fiscal/juridique (CGI, article, sanction, obligation, déclaration, échéance, Code du Travail, Legal Flow)
+- delegate_to_reco(reason): rapprochement bancaire (relevés, 521, écarts, pointage)
+- ask_clarification(question): intention trop vague ou multi-entreprise ambiguë (une seule question ciblée)
+- answer_directly(): simple salutation/accueil sans expertise
+Réponds UNIQUEMENT en JSON {"action":"...","reason":"...","clarificationQuestion":"..."} — aucun texte hors JSON.
+Mémoire à utiliser : historique des messages, contexte entreprise (plan/tiers/journaux) et résultats des tâches précédentes qui te seront fournis.
+`.trim();
+
+export function buildAccueilDelegationPrompt(
+  agentContext: AgentContextShape,
+  historySummary: string,
+  accountingContextSummary: string,
+  userMessage: string
+): string {
+  return (
+    `Tu es DC Intelligence incarné par « ${agentContext.name} » (${agentContext.role}). ${agentContext.instructions}\n\n` +
+    `${ACCUEIL_TOOLS_SPEC}\n\n` +
+    `Contexte entreprise: ${accountingContextSummary}\n` +
+    `Historique récent:\n${historySummary || '(première demande)'}\n\n` +
+    `Message client à qualifier: "${userMessage}"\n` +
+    `Décide maintenant quel OUTIL appeler.`
+  );
+}
+
+export function parseAccueilDelegationReply(reply: string): AccueilDelegationDecision | null {
+  try {
+    const m = reply.match(/\{[\s\S]*\}/);
+    if (!m) return null;
+    const obj = JSON.parse(m[0]);
+    if (!obj || typeof obj.action !== 'string') return null;
+    if (!['delegate_to_compta', 'delegate_to_juridique', 'delegate_to_reco', 'ask_clarification', 'answer_directly'].includes(obj.action)) return null;
+    return {
+      action: obj.action,
+      reason: typeof obj.reason === 'string' ? obj.reason.slice(0, 300) : undefined,
+      clarificationQuestion: typeof obj.clarificationQuestion === 'string' ? obj.clarificationQuestion.slice(0, 400) : undefined,
+      confidence: typeof obj.confidence === 'number' ? obj.confidence : 0.85,
+    };
+  } catch {
+    return null;
+  }
 }
 
 /** Alias conservé pour compatibilité (anciens imports) : même contrat que buildAgentPrompt. */

@@ -17,6 +17,7 @@ import { logAuditInteraction } from './services/auditLog';
 import { classifyAndExtractMultimodalInput } from './services/multimodalClassifier';
 import { routeUserRequest } from './services/routerAgent';
 import { createTask } from './services/taskEngine';
+import { buildAccueilDelegationPrompt, parseAccueilDelegationReply } from './services/llmService';
 import {
   Agent,
   ApiKeyConfig,
@@ -540,11 +541,61 @@ export default function App() {
       postUserSignal('frustration').catch(() => {});
     }
 
-    // Multimodal Classification & Auto-Routing : routeUserRequest est invoqué
-    // à chaque envoi ; hors périmètre accueil, on bascule vers le spécialiste.
-    // Support fichier réel (image/PDF) via VLM backend, sinon heuristique.
+    // Multimodal Classification & Auto-Routing : l'Agent Accueil (vrai LLM avec mémoire)
+    // décide lui-même à qui déléguer via ses outils. La heuristique reste en fallback.
     const multimodalRes = await classifyAndExtractMultimodalInput({ text, file });
-    const routingRes = routeUserRequest(text, multimodalRes);
+    let routingRes = routeUserRequest(text, multimodalRes);
+    // Tentative LLM : l'Accueil décide via son prompt outils + mémoire
+    try {
+      const accueilAgentForDecision = agents.find((a) => a.isDefaultEntry || a.isRouter) || getDefaultEntryAgent(agents);
+      const sessForHistory = chatSessions.find((s) => s.id === sessionId);
+      const historySummary = (sessForHistory?.messages || [])
+        .slice(-4)
+        .map((m) => `${m.sender === 'user' ? 'Client' : 'DC'}: ${String(m.content).slice(0, 200)}`)
+        .join('\n');
+      const accCtxForDecision = getAccountingContext();
+      const ctxSummary = `company:${accCtxForDecision.companyId || '—'} status:${accCtxForDecision.contextStatus} plan:${accCtxForDecision.planComptableStatus}`;
+      const delegationPrompt = buildAccueilDelegationPrompt(
+        { name: accueilAgentForDecision.name, role: accueilAgentForDecision.role, instructions: accueilAgentForDecision.instructions },
+        historySummary,
+        ctxSummary,
+        text
+      );
+      const decisionRaw = await Promise.race([
+        generateChatResponse({
+          model: models.find((m) => m.id === selectedModelId) || models[0] || DEFAULT_MODEL,
+          conversationHistory: [],
+          userMessage: delegationPrompt,
+          apiKeys,
+          reasoningEffort: 'Low',
+          agentContext: { name: accueilAgentForDecision.name, role: accueilAgentForDecision.role, instructions: accueilAgentForDecision.instructions },
+        }),
+        new Promise<string>((_, rej) => setTimeout(() => rej(new Error('delegation_timeout')), 8000)),
+      ]);
+      const parsed = parseAccueilDelegationReply(String(decisionRaw || ''));
+      if (parsed) {
+        const map: Record<string, string> = {
+          delegate_to_compta: 'agent-1',
+          delegate_to_juridique: 'agent-3',
+          delegate_to_reco: 'agent-2',
+          ask_clarification: 'agent-router',
+          answer_directly: 'agent-router',
+        };
+        const targetFromLLM = map[parsed.action];
+        if (targetFromLLM) {
+          routingRes = {
+            domain: parsed.action === 'delegate_to_compta' ? 'COMPTABILITÉ' : parsed.action === 'delegate_to_juridique' ? 'JURIDIQUE_FISCAL' : parsed.action === 'delegate_to_reco' ? 'RAPPROCHEMENT' : parsed.action === 'ask_clarification' ? 'HUMAIN' : 'ACCUEIL',
+            targetAgentId: targetFromLLM,
+            confidence: parsed.confidence || 0.85,
+            reasoning: parsed.reason || `Décision LLM Accueil: ${parsed.action}`,
+            requiresClarification: parsed.action === 'ask_clarification',
+            clarificationQuestion: parsed.clarificationQuestion,
+          };
+        }
+      }
+    } catch {
+      // Fallback heuristique déjà calculé ci-dessus
+    }
 
     const entryAgent = getDefaultEntryAgent(agents);
     const visibleAgent = entryAgent; // façade unique : le client ne parle qu'à DC Intelligence
