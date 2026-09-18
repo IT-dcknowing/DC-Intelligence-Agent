@@ -244,7 +244,7 @@ async function openRouterChat({ model, messages, temperature, maxTokens, title }
     model,
     messages: clean,
     temperature: typeof temperature === 'number' ? Math.min(Math.max(temperature, 0), 1) : 0.3,
-    max_tokens: maxTokens || 1500,
+    max_tokens: maxTokens || 3500,
   };
   if (/r1|reasoner|thinking/i.test(model)) body.reasoning = { effort: 'medium' };
   const r = await fetchUpstream('https://openrouter.ai/api/v1/chat/completions', {
@@ -921,15 +921,15 @@ async function handleInboundMessage(wa, { wamid, from, type, msg }) {
   try {
     try {
       answer = await withTimeout(openRouterChat({
-        model: primaryModel, messages: composeMessages, temperature: 0.4, maxTokens: 700,
-      }), 16000, 'compose_timeout');
+        model: primaryModel, messages: composeMessages, temperature: 0.4, maxTokens: 2000,
+      }), 22000, 'compose_timeout');
       console.log(`[WA STEP] wamid=${wamid} étape=composition_ok modèle=${primaryModel} len=${answer.length}`);
     } catch (e1) {
       console.warn('[WA] composition repli 2e modèle', String((e1 && e1.message) || e1).slice(0, 150));
       await say(waConv.PRESENCE.oneMoreCheck); // RÉEL : on relance vraiment une composition
       answer = await withTimeout(openRouterChat({
-        model: fallbackModel, messages: composeMessages, temperature: 0.4, maxTokens: 700,
-      }), 16000, 'compose_timeout2');
+        model: fallbackModel, messages: composeMessages, temperature: 0.4, maxTokens: 2000,
+      }), 22000, 'compose_timeout2');
       console.log(`[WA STEP] wamid=${wamid} étape=composition_ok modèle=${fallbackModel} len=${answer.length}`);
     }
     composeDone = true;

@@ -364,8 +364,23 @@ export default function App() {
       try {
         const remoteSessions = await fetchSessions();
         if (remoteSessions && remoteSessions.length > 0) {
-          setChatSessions(remoteSessions);
-          setSelectedSessionId(remoteSessions[0].id);
+          setChatSessions((prev) => {
+            // Ne jamais écraser un message optimiste en cours d'envoi
+            const remoteIds = new Set(remoteSessions.map((s) => s.id));
+            const localOnly = prev.filter((s) => !remoteIds.has(s.id));
+            const merged = remoteSessions.map((rs: ChatSession) => {
+              const local = prev.find((p) => p.id === rs.id);
+              if (local && local.messages.length > (rs.messages?.length || 0)) {
+                const extra = local.messages.slice(rs.messages.length);
+                // Garde les messages locaux non encore persistés (optimistic UI)
+                return { ...rs, messages: [...(rs.messages || []), ...extra], lastMessage: extra[extra.length - 1]?.content || rs.lastMessage, lastMessageTime: extra[extra.length - 1]?.timestamp || rs.lastMessageTime };
+              }
+              return rs;
+            });
+            return [...localOnly, ...merged].sort((a, b) => String(b.id).localeCompare(String(a.id)));
+          });
+          // Ne pas forcer le changement de session si l'utilisateur est déjà dedans
+          setSelectedSessionId((prev) => (prev && remoteSessions.some((s) => s.id === prev) ? prev : remoteSessions[0].id));
         } else if (remoteSessions) {
           let local: ChatSession[] = [];
           try {
@@ -501,6 +516,16 @@ export default function App() {
 
     const displayContent = file ? (text ? `${text}\n[📎 ${file.name}]` : `📎 ${file.name}`) : text;
 
+    // Déduplication : même contenu + même pièce <2min → ne pas créer de doublon, relancer le précédent
+    const lastMsg = chatSessions.find((s) => s.id === sessionId)?.messages.slice(-1)[0];
+    if (lastMsg && lastMsg.sender === 'user' && lastMsg.content === displayContent) {
+      const lastTs = parseInt((lastMsg.id.split('-')[1] || '0'), 10);
+      if (!isNaN(lastTs) && Date.now() - lastTs < 120000) {
+        addToast('info', 'Message identique détecté', 'Traitement déjà en cours — pas de doublon créé.');
+        return;
+      }
+    }
+
     const userMsg: ChatMessage = {
       id: `msg-${Date.now()}`,
       sender: 'user',
@@ -619,12 +644,15 @@ export default function App() {
             hits.map((h) => `[doc:${h.title}] ${h.chunk}`).join('\n---\n');
         }
       }
-      // P0.2 Contexte entreprise injecté (jamais inventé) : companyId -> plans/tiers/journaux
+      // P0.2 Contexte entreprise : ne mentionner le plan que si la question l'exige (comptabilité/imputation)
       const accCtx = getAccountingContext();
-      if (accCtx.contextStatus !== 'GENERAL_ONLY') {
-        ragBlock += `\n\n[Contexte entreprise: ${accCtx.contextStatus} — plan:${accCtx.planComptableStatus} tiers:${accCtx.planTiersStatus} journaux:${accCtx.journauxStatus}]`;
-      } else {
-        ragBlock += `\n\n[Contexte entreprise: GENERAL_ONLY — Votre plan comptable interne n'est pas encore chargé. Les comptes proposés peuvent nécessiter une adaptation.]`;
+      const isComptaQuestion = facilitatingAgent && (facilitatingAgent.id === 'agent-1' || facilitatingAgent.associatedSoftware === 'Compta Flow');
+      if (isComptaQuestion) {
+        if (accCtx.contextStatus !== 'GENERAL_ONLY') {
+          ragBlock += `\n\n[Contexte entreprise: ${accCtx.contextStatus} — plan:${accCtx.planComptableStatus} tiers:${accCtx.planTiersStatus} journaux:${accCtx.journauxStatus}]`;
+        } else {
+          ragBlock += `\n\n[Contexte entreprise: GENERAL_ONLY — Votre plan comptable interne n'est pas encore chargé. Les comptes proposés peuvent nécessiter une adaptation.]`;
+        }
       }
 
       // Si délégation, on prévient le client AVANT l'appel spécialiste — et on crée
@@ -635,7 +663,7 @@ export default function App() {
           id: `msg-deleg-${currentTask.taskId}`,
           sender: 'agent',
           senderName: 'DC Intelligence',
-          content: `Bonjour ! Je vais demander à notre ${targetAgent.name.toLowerCase()} de vérifier cela pour vous.`,
+          content: `Laissez-moi vérifier cela pour vous, un instant...`,
           timestamp: timeStr,
           taskRef: currentTask,
         };
@@ -729,13 +757,8 @@ export default function App() {
         responseTime.getMinutes()
       ).padStart(2, '0')}`;
 
-      // Retour visible toujours estampillé DC Intelligence, même si l'expertise
-      // vient du spécialiste — évite l'effet "j'ai parlé à 3 agents".
-      const wrappedContent = needsDelegation
-        ? aiResponseContent.startsWith("J'ai eu le retour")
-          ? aiResponseContent
-          : `J'ai eu le retour de notre ${targetAgent.name.toLowerCase()}.\n\n${aiResponseContent}`
-        : aiResponseContent;
+      // Retour visible toujours estampillé DC Intelligence — pas de mention d'agent interne.
+      const wrappedContent = aiResponseContent;
 
       const aiMsg: ChatMessage = {
         id: `msg-ai-${Date.now()}`,

@@ -63,17 +63,45 @@ export function routeUserRequest(
     };
   }
 
-  // Domaine Comptabilité (« agent comptable » doit router explicitement, pas par défaut)
+  // Domaine Juridique & Fiscal PRIORITAIRE (articles, obligations, sanctions, échéances, CGI)
+  // Doit passer AVANT compta : une question sur obligations déclaratives RSI, sanctions art.224/225 CGI
+  // ou Code du Travail ne doit jamais aller vers compta même si elle contient "TVA/vente".
   if (
-    /\b(compta|comptables?|facture|écriture|ecriture|syscohada|ht|tva|ttc|601|401|411|achat|vente|journal|imputation)\b/.test(
+    /\b(cgi|code\s+général\s+des\s+impôts|livre\s+de\s+proc[eé]dure|article\s*\d+|art\.\s*\d+|sanction|pénalit|penalit|obligation|d[eé]claration|d[eé]clarative|échéance|echeance|code\s+du\s+travail)\b/.test(
       text
     )
   ) {
     return {
-      domain: 'COMPTABILITÉ',
-      targetAgentId: 'agent-1',
+      domain: 'JURIDIQUE_FISCAL',
+      targetAgentId: 'agent-3',
+      confidence: 0.93,
+      reasoning: "Question juridique/fiscale (article CGI, obligation déclarative, sanction, échéance, Code du Travail) → Agent Juridique & Fiscal.",
+      requiresClarification: false,
+    };
+  }
+
+  // Sigles fiscaux prioritaires (« on paie l'IMF » = fiscal, pas paie salariale).
+  if (/\b(imf|ifu|rccm)\b/.test(text)) {
+    return {
+      domain: 'JURIDIQUE_FISCAL',
+      targetAgentId: 'agent-3',
+      confidence: 0.85,
+      reasoning: 'Sigle fiscal détecté. Orientation vers l’Agent Juridique & Fiscal (Legal Flow).',
+      requiresClarification: false,
+    };
+  }
+
+  // Domaine Juridique & Fiscal général (« Legal Flow » route vers legal, jamais « pas d'accès »)
+  if (
+    /legal[\s_-]*flow|legalflow|\b(contentieux|conformité|conformite|fiscal|dgi|impôt|impot|statuts|contrat|bail|das|cnps|patente|airsi|retenue|télédéclaration|e-impots|juridique)\b/.test(
+      text
+    )
+  ) {
+    return {
+      domain: 'JURIDIQUE_FISCAL',
+      targetAgentId: 'agent-3',
       confidence: 0.9,
-      reasoning: "Demande orientée tenue comptable et imputation SYSCOHADA.",
+      reasoning: "Demande d'assistance fiscale DGI ou de conformité juridique.",
       requiresClarification: false,
     };
   }
@@ -93,28 +121,31 @@ export function routeUserRequest(
     };
   }
 
-  // Sigles fiscaux prioritaires (« on paie l'IMF » = fiscal, pas paie salariale).
-  if (/\b(imf|ifu|rccm)\b/.test(text)) {
+  // Domaine Comptabilité (« agent comptable » doit router explicitement, pas par défaut)
+  // Retiré tva/vente/ttc trop génériques qui capturaient les questions fiscales ; gardé les termes strictement comptables
+  if (
+    /\b(compta|comptables?|facture|écriture|ecriture|syscohada|ht|ttc|601|401|411|achat|journal|imputation|bilan|balance|grand\s+livre)\b/.test(
+      text
+    )
+  ) {
+    // Si la question contient aussi un marqueur fiscal fort, laisser la priorité juridique déjà traitée ci-dessus
+    // Ici on ne revient jamais sur une question déjà qualifiée juridique
     return {
-      domain: 'JURIDIQUE_FISCAL',
-      targetAgentId: 'agent-3',
-      confidence: 0.85,
-      reasoning: 'Sigle fiscal détecté. Orientation vers l’Agent Juridique & Fiscal (Legal Flow).',
+      domain: 'COMPTABILITÉ',
+      targetAgentId: 'agent-1',
+      confidence: 0.9,
+      reasoning: "Demande orientée tenue comptable et imputation SYSCOHADA.",
       requiresClarification: false,
     };
   }
 
-  // Domaine Juridique & Fiscal (« Legal Flow » route vers legal, jamais « pas d'accès »)
-  if (
-    /legal[\s_-]*flow|legalflow|\b(contentieux|conformité|conformite|fiscal|dgi|impôt|impot|statuts|contrat|bail|das|cnps|patente|airsi|retenue|télédéclaration|e-impots)\b/.test(
-      text
-    )
-  ) {
+  // Cas spécifique : TVA seule ("distinction TVA vente/prestation") → juridique si mention vente/prestation fiscal
+  if (/\btva\b/.test(text) && /\b(vente|prestation|collectée|déductible|exonération)\b/.test(text) && !/\b(écriture|imputation|journal|601|401)\b/.test(text)) {
     return {
       domain: 'JURIDIQUE_FISCAL',
       targetAgentId: 'agent-3',
-      confidence: 0.9,
-      reasoning: "Demande d'assistance fiscale DGI ou de conformité juridique.",
+      confidence: 0.82,
+      reasoning: "Question TVA (régime vente/prestation) à caractère fiscal → Agent Juridique & Fiscal.",
       requiresClarification: false,
     };
   }

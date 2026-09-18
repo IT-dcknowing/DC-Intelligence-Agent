@@ -299,14 +299,12 @@ export function buildAgentPrompt(agentContext?: AgentContextShape, opts?: { spec
       `Tu ne dis jamais « je suis l'Agent Comptabilité/Juridique/Reco ».`
     );
   }
-  // Cas 2 : délégation → DC parle, spécialiste exécute en arrière-plan.
-  // Le LLM reçoit l'expertise du spécialiste comme SOURCE, pas comme identité.
+  // Cas 2 : délégation → DC reste la voix, l'expertise spécialiste est une source interne anonyme.
   return (
     `Tu es DC Intelligence, interlocuteur unique du client. ` +
-    `Tu as demandé à ton expert interne « ${specialist.name} » (${specialist.role}) de traiter la demande. ` +
-    `Expertise à restituer fidèlement (sans changer d'identité) : ${specialist.instructions} ` +
-    `Consigne de restitution : parle toujours à la 1re personne en tant que DC Intelligence (« J'ai demandé à notre agent comptable... », « Il me revient que... »), ` +
-    `ne prétends jamais être l'expert lui-même, ne simule pas de consultation si le résultat est vide.`
+    `Tu disposes de l'expertise suivante à restituer : ${specialist.instructions} ` +
+    `Consigne stricte : ne révèle JAMAIS l'existence d'agents internes, de relais ou de retours (« agent comptable », « j'ai demandé à... », « il me revient que... » sont interdits). ` +
+    `Présente la réponse comme tienne, ou avec une formule neutre (« Laissez-moi vérifier... », « Voici ce que j'ai trouvé... »), ne simule pas de consultation si le résultat est vide.`
   );
 }
 
@@ -325,6 +323,9 @@ export function friendlyInferenceError(err: any): string {
   const m = String(err?.message ?? err ?? '');
   if (/429|LIMITE_ATTEINTE|backend_429|openrouter_429|rate.?limit|quota|trop de requêtes/i.test(m)) {
     return RATE_LIMIT_MESSAGE;
+  }
+  if (/502|504|Bad Gateway|indisponible temporairement|backend_502|backend_504/i.test(m)) {
+    return "Le service IA est momentanément indisponible. Réessai automatique en cours... Si cela persiste, je vous redirige vers un autre expert.";
   }
   return m || 'Échec de la réponse du modèle.';
 }
@@ -356,7 +357,7 @@ async function callBackendChat(
     res = await fetch(apiUrl('/chat'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: modelId, messages, temperature: 0.3 }),
+      body: JSON.stringify({ model: modelId, messages, temperature: 0.3, max_tokens: 3500 }),
     });
   } catch {
     throw new Error('backend_unreachable');
@@ -373,6 +374,13 @@ async function callBackendChat(
       return callBackendChat(modelId, history, userMessage, reasoningEffort, agentContext, specialistContext, 1);
     }
     throw new Error('LIMITE_ATTEINTE');
+  }
+  if ((res.status === 502 || res.status === 504) && attempt === 0) {
+    await new Promise((r) => setTimeout(r, 1500));
+    return callBackendChat(modelId, history, userMessage, reasoningEffort, agentContext, specialistContext, 1);
+  }
+  if (res.status === 502 || res.status === 504) {
+    throw new Error(`backend_${res.status}: indisponible temporairement, réessayez`);
   }
   if (!res.ok) {
     throw new Error(`backend_${res.status}: ${String((data as any)?.detail || (data as any)?.error || res.statusText).slice(0, 300)}`);
@@ -417,6 +425,7 @@ async function callOpenRouter(
     model: modelId,
     messages: formattedMessages,
     temperature: 0.3,
+    max_tokens: 3500,
   };
 
   // If model supports reasoning effort (e.g. DeepSeek R1 or reasoning models)
@@ -496,6 +505,7 @@ async function callDeepSeekDirect(
       model: deepseekModel,
       messages,
       temperature: 0.3,
+      max_tokens: 3500,
     }),
   });
 
@@ -550,7 +560,7 @@ async function callAnthropicDirect(
     },
     body: JSON.stringify({
       model: anthropicModel,
-      max_tokens: 1500,
+      max_tokens: 3500,
       system,
       messages,
     }),

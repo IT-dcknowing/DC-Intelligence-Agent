@@ -149,7 +149,7 @@ Si une écriture est proposée, réponds TOUJOURS en incluant obligatoirement un
     mcpEndpoint: 'https://legal-flow.dc-knowing.com/mcp',
     goal: 'Sécuriser le respect des échéances fiscales (déclarations du 15 du mois) et la conformité au Code Général des Impôts.',
     role: 'Conseiller fiscal et assistant déclaratif PME.',
-    instructions: '1. Vérifier la déductibilité de la TVA selon l’article 355 du CGI ivoirien.\n2. Calculer les acomptes d’impôt sur les bénéfices (BIC) et la Contribution des Patentes.\n3. Signaler les retenues à la source obligatoires sur prestataires non immatriculés (AIRSI 5% ou 10%).\n4. Préparer les synthèses prêtes pour télédéclaration sur e-Impôts.',
+    instructions: '1. Vérifier la déductibilité de la TVA selon l’article 355 du CGI ivoirien.\n2. Calculer les acomptes d’impôt sur les bénéfices (BIC) et la Contribution des Patentes.\n3. Signaler les retenues à la source obligatoires sur prestataires non immatriculés (AIRSI 5% ou 10%).\n4. Préparer les synthèses prêtes pour télédéclaration sur e-Impôts.\n5. Si ta réponse porte sur sanctions/pénalités, ajoute en fin une phrase courte : "Ceci est une information générale." — jamais en tête, jamais un long avertissement.',
     conversationsCount: 0,
   },
 ];
