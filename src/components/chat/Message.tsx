@@ -12,6 +12,47 @@ import { Copy, CheckCheck } from 'lucide-react';
  * Tout le Markdown est sémantique (h1/h2/h3/strong/em/hr) avec hiérarchie 24/20/18px.
  */
 
+// Performance Optimization (Bolt ⚡):
+// Hoisting remarkPlugins array and components map to module scope prevents re-instantiating
+// the unified processor pipeline and creating new component render functions on every render frame.
+const REMARK_PLUGINS = [remarkGfm];
+
+const MARKDOWN_COMPONENTS: React.ComponentProps<typeof ReactMarkdown>['components'] = {
+  // Titres sémantiques avec tailles spec
+  h1: ({ children }) => <h1>{children}</h1>,
+  h2: ({ children }) => <h2>{children}</h2>,
+  h3: ({ children }) => <h3>{children}</h3>,
+  // Gras = 600, jamais 700
+  strong: ({ children }) => <strong style={{ fontWeight: 600 }}>{children}</strong>,
+  em: ({ children }) => <em style={{ color: '#4A4A4A' }}>{children}</em>,
+  hr: () => <hr />,
+  // Liens discrets
+  a: ({ href, children }) => (
+    <a href={href} target="_blank" rel="noreferrer">
+      {children}
+    </a>
+  ),
+  // Code inline & blocs
+  code: ({ inline, children, ...props }: any) =>
+    inline ? (
+      <code {...props}>{children}</code>
+    ) : (
+      <code {...props}>{children}</code>
+    ),
+  pre: ({ children }) => <pre>{children}</pre>,
+  // Emojis : 1.1em via span parent .emoji déjà géré en CSS
+  p: ({ children }) => <p>{children}</p>,
+  ul: ({ children }) => <ul>{children}</ul>,
+  ol: ({ children }) => <ol>{children}</ol>,
+  li: ({ children }) => <li>{children}</li>,
+  table: ({ children }) => <table>{children}</table>,
+  thead: ({ children }) => <thead>{children}</thead>,
+  tbody: ({ children }) => <tbody>{children}</tbody>,
+  th: ({ children }) => <th>{children}</th>,
+  td: ({ children }) => <td>{children}</td>,
+  blockquote: ({ children }) => <blockquote>{children}</blockquote>,
+};
+
 interface MessageProps {
   role: 'user' | 'ai';
   content: string;
@@ -24,7 +65,10 @@ interface MessageProps {
   extra?: React.ReactNode; // ProposalCard, tables, actions — rendu sous le texte IA
 }
 
-export const Message: React.FC<MessageProps> = ({ role, content, timestamp, senderName, isCopied, onCopy, meta, extra }) => {
+// Performance Optimization (Bolt ⚡):
+// Wrapped in React.memo to prevent unnecessary re-renders of previous messages in the chat feed
+// during LLM token streaming, user input typing, or parent state updates.
+export const Message: React.FC<MessageProps> = React.memo(({ role, content, timestamp, senderName, isCopied, onCopy, meta, extra }) => {
   const [isHovered, setIsHovered] = useState(false);
 
   if (role === 'user') {
@@ -89,42 +133,8 @@ export const Message: React.FC<MessageProps> = ({ role, content, timestamp, send
         {/* Corps Markdown — Lora 16px / 1.65, jamais de syntaxe brute */}
         <div className="dc-prose">
           <ReactMarkdown
-            remarkPlugins={[remarkGfm]}
-            components={{
-              // Titres sémantiques avec tailles spec
-              h1: ({ children }) => <h1>{children}</h1>,
-              h2: ({ children }) => <h2>{children}</h2>,
-              h3: ({ children }) => <h3>{children}</h3>,
-              // Gras = 600, jamais 700
-              strong: ({ children }) => <strong style={{ fontWeight: 600 }}>{children}</strong>,
-              em: ({ children }) => <em style={{ color: '#4A4A4A' }}>{children}</em>,
-              hr: () => <hr />,
-              // Liens discrets
-              a: ({ href, children }) => (
-                <a href={href} target="_blank" rel="noreferrer">
-                  {children}
-                </a>
-              ),
-              // Code inline & blocs
-              code: ({ inline, children, ...props }: any) =>
-                inline ? (
-                  <code {...props}>{children}</code>
-                ) : (
-                  <code {...props}>{children}</code>
-                ),
-              pre: ({ children }) => <pre>{children}</pre>,
-              // Emojis : 1.1em via span parent .emoji déjà géré en CSS
-              p: ({ children }) => <p>{children}</p>,
-              ul: ({ children }) => <ul>{children}</ul>,
-              ol: ({ children }) => <ol>{children}</ol>,
-              li: ({ children }) => <li>{children}</li>,
-              table: ({ children }) => <table>{children}</table>,
-              thead: ({ children }) => <thead>{children}</thead>,
-              tbody: ({ children }) => <tbody>{children}</tbody>,
-              th: ({ children }) => <th>{children}</th>,
-              td: ({ children }) => <td>{children}</td>,
-              blockquote: ({ children }) => <blockquote>{children}</blockquote>,
-            }}
+            remarkPlugins={REMARK_PLUGINS}
+            components={MARKDOWN_COMPONENTS}
           >
             {content}
           </ReactMarkdown>
@@ -154,4 +164,6 @@ export const Message: React.FC<MessageProps> = ({ role, content, timestamp, send
       </div>
     </div>
   );
-};
+});
+
+Message.displayName = 'Message';
