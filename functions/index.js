@@ -717,11 +717,10 @@ async function handleInboundMessage(wa, { wamid, from, type, msg }) {
     return { state: conv.state };
   }
 
-  // Routage explicite (refonte §3.2/§6/§8.2-8.3).
-  const route = waConv.routeText(`${extractedText} ${docType}`);
-  if (docType === 'tax_notice' || docType === 'legal_contract') { route.domain = 'JURIDIQUE_FISCAL'; route.agent = 'legal'; }
-  else if (docType === 'invoice') { route.domain = 'COMPTABILITÉ'; route.agent = 'compta'; }
-  else if (docType === 'bank_statement') { route.domain = 'RAPPROCHEMENT'; route.agent = 'reco'; }
+  // Routage unifié (orchestrateur partagé : même matrice et mêmes seuils que
+  // routerAgent.ts du front, servie aussi par POST /api/route). Le multimodal
+  // prime sur le texte, comme sur le web.
+  const route = classifyIntentBackend(`${extractedText} ${docType}`, docType, confidence);
   const TOPIC_LABEL = { invoice: 'Facture / pièce', tax_notice: 'Avis fiscal', bank_statement: 'Relevé bancaire', legal_contract: 'Document juridique', general_query: 'Question' };
 
   // Demande d'humain explicite : transmission immédiate, sans détour.
@@ -831,6 +830,29 @@ async function handleInboundMessage(wa, { wamid, from, type, msg }) {
       console.warn('[WA] outils legal partiels', String((e && e.message) || e).slice(0, 150));
     }
   }
+
+  // Outils Compta Flow / RECO — même structure que legal (identification déjà
+  // faite → outils métier → composition). Gardés par mcpTargetIsReal : sans URL
+  // MCP réelle configurée, AUCUN appel n'est tenté (jamais de simulation ;
+  // les domaines dc-knowing.com sont exclus par mcpTargetIsReal).
+  if (route.agent === 'compta' && companyId && mcpTargetIsReal('Compta Flow')) {
+    try {
+      const ctxRaw = await withTimeout(mcpCallTool({ software: 'Compta Flow', toolName: 'get_company_context', args: { entreprise_id: companyId }, meta: { wamid, phone: from } }), 12000, 'tool_timeout');
+      toolContext += `\n[Contexte Compta] ${String(ctxRaw).slice(0, 2500)}`;
+      actionsReelles.push('contexte entreprise (Compta Flow)');
+    } catch (e) {
+      console.warn('[WA] outils compta indisponibles', String((e && e.message) || e).slice(0, 150));
+    }
+  }
+  if (route.agent === 'reco' && companyId && mcpTargetIsReal('RECO')) {
+    try {
+      const recoRaw = await withTimeout(mcpCallTool({ software: 'RECO', toolName: 'get_reconciliation_status', args: { entreprise_id: companyId }, meta: { wamid, phone: from } }), 12000, 'tool_timeout');
+      toolContext += `\n[Rapprochement] ${String(recoRaw).slice(0, 2500)}`;
+      actionsReelles.push('statut rapprochement (RECO)');
+    } catch (e) {
+      console.warn('[WA] outils reco indisponibles', String((e && e.message) || e).slice(0, 150));
+    }
+  }
   await refreshTypingIfSlow();
 
   // Outil question→réponse IA Legal Flow (tier RÉPONDRE, consigne 256b54b) :
@@ -899,8 +921,12 @@ async function handleInboundMessage(wa, { wamid, from, type, msg }) {
   const correctionNote = isCorrection
     ? ' Correction du client : annule et remplace sa demande précédente, reprends l’historique ci-dessus.'
     : '';
+  // Canal compta : l'IA termine par un JSON normalisé pour contrôle 7-checks automatique.
+  const comptaJsonInstruction = route.agent === 'compta'
+    ? ' Si la demande porte sur une écriture comptable, termine ta réponse par un bloc ```json {"typePiece":"...","tiers":"...","date":"AAAA-MM-JJ","reference":"...","montantHT":0,"montantTVA":0,"montantTTC":0,"journal":"ACH","ecriture":[{"compte":"...","intitule":"...","debit":0,"credit":0}],"mentions":{"rccm":"...","date":"...","reference":"...","tiers":"..."}} pour contrôle automatique.'
+    : '';
   const composeMessages = [
-    { role: 'system', content: `${waConv.PERSONA_SYSTEM} Contexte dossier : entreprise=${companyLabel || 'non identifiée'}, domaine=${route.domain}. ${dossierContext || 'Premier contact.'}${correctionNote} Actions réellement effectuées : ${actionsReelles.join(' → ') || 'AUCUNE — ne prétends à aucune vérification'}. Données outils : ${toolContext.slice(0, 4000) || 'aucune'}. Tu restes l’Agent d’Accueil : transmets le résultat, sans changer de rôle. Si les données sont insuffisantes, dis ce qu’il te manque au lieu d’inventer.` },
+    { role: 'system', content: `${waConv.PERSONA_SYSTEM} Contexte dossier : entreprise=${companyLabel || 'non identifiée'}, domaine=${route.domain}. ${dossierContext || 'Premier contact.'}${correctionNote} Actions réellement effectuées : ${actionsReelles.join(' → ') || 'AUCUNE — ne prétends à aucune vérification'}. Données outils : ${toolContext.slice(0, 4000) || 'aucune'}. Tu restes l’Agent d’Accueil : transmets le résultat, sans changer de rôle. Si les données sont insuffisantes, dis ce qu’il te manque au lieu d’inventer.${comptaJsonInstruction}` },
     { role: 'user', content: `${isCorrection ? 'CORRECTION (remplace ma demande précédente) — ' : ''}Message client (${docType}, confiance ${confidence}) : ${extractedText.slice(0, 2500)}${entities && entities.amount ? ` [montant détecté : ${entities.amount}]` : ''}` },
   ];
   // Fallback d'attente : si la composition dépasse 10 s, on prévient le client
@@ -948,6 +974,32 @@ async function handleInboundMessage(wa, { wamid, from, type, msg }) {
 
   } // fin repli composition (lf_ask absent — answer déjà prête sinon)
 
+  // Validation 7-checks canal WhatsApp (miroir accountingValidator.ts du front) :
+  // toute proposition d'écriture JSON dans la réponse est contrôlée ; les erreurs
+  // BLOQUANTES sont signalées au client dans un message dédié au lieu de laisser
+  // passer une écriture fausse.
+  let proposalValidation = null;
+  if (route.agent === 'compta' && answer) {
+    try {
+      const jm = answer.match(/```json\s*([\s\S]*?)\s*```/);
+      if (jm && jm[1]) {
+        const parsed = JSON.parse(jm[1]);
+        if (parsed && (parsed.ecriture || parsed.journal || parsed.tiers)) {
+          proposalValidation = validateComptaProposalBackend(parsed);
+          actionsReelles.push(`validation 7-checks (${proposalValidation.checksPassed}/7)`);
+          console.log(`[WA STEP] wamid=${wamid} étape=validation_7checks ok=${proposalValidation.ok} erreurs=${proposalValidation.erreurs.length} alertes=${proposalValidation.alertes.length}`);
+        }
+      }
+    } catch (e) {
+      console.warn('[WA] proposition JSON illisible', String((e && e.message) || e).slice(0, 120));
+    }
+  }
+  if (proposalValidation && proposalValidation.erreurs.length) {
+    try {
+      await wa.sendText(from, `⚠️ Avant de valider, je dois vous signaler ${proposalValidation.erreurs.length} point(s) bloquant(s) sur l'écriture :\n- ${proposalValidation.erreurs.slice(0, 4).join('\n- ').slice(0, 900)}\nDites-moi comment corriger et je refais le contrôle.`);
+    } catch {}
+  }
+
   // PRÉSENCE 3 — RÉEL : « j'ai son retour » SEULEMENT si un outil a VRAIMENT répondu
   // (lf_ask compte : appel tracé dans tool_calls). Sans outil, on envoie le résultat
   // sans prétendre à une vérification inexistante (bug « Merde » de la refonte §1).
@@ -971,7 +1023,7 @@ async function handleInboundMessage(wa, { wamid, from, type, msg }) {
       source: 'whatsapp', llm: { provider: 'openrouter', modele: route.agent },
       question: `WA ${from}: ${extractedText.slice(0, 500)}`,
       ecritureProposee: null,
-      validation: { ok: true, via: 'wa_pipeline', state: conv.state, docType },
+      validation: { ok: !proposalValidation || proposalValidation.erreurs.length === 0, via: 'wa_pipeline', state: conv.state, docType, proposalValidation: proposalValidation || undefined },
     }).catch(() => {});
   } catch {}
   return { state: conv.state };
@@ -1269,6 +1321,63 @@ async function getGoogleAccessToken(integration) {
 
 // --- Proxy LLM sécurisé : le front appelle /api/chat, la clé reste côté serveur ---
 // Supporte /api/chat (prod Firebase) et /chat (dev via vite proxy rewrite).
+// Modèles capables de vision (sinon les pièces jointes sont ignorées, avec log).
+const VISION_MODEL_RX = /vl|vision|gpt-4o|claude|gemini|sonnet|opus|llama-4|qwen.*vl/i;
+
+// Résout des pièces jointes stockées (chat/...) en payloads vision OpenRouter.
+// Logs : nombre + octets UNIQUEMENT, jamais le base64.
+async function resolveChatImages(imagePaths) {
+  if (!Array.isArray(imagePaths) || !imagePaths.length) return [];
+  const out = [];
+  for (const p of imagePaths.slice(0, 2)) {
+    const path = str(p, 220);
+    if (!path || !path.startsWith('chat/') || path.includes('..')) continue;
+    try {
+      let buf = null;
+      let mime = 'image/jpeg';
+      try {
+        const dl = await storageBucket().file(path).download();
+        buf = dl[0];
+      } catch {
+        const mem = (memoryStore.chat_uploads || {})[path];
+        if (!mem) continue;
+        buf = Buffer.from(mem.base64, 'base64');
+        mime = mem.mimeType || mime;
+      }
+      if (!buf || !buf.length || buf.length > 8_000_000) continue;
+      if (!/^image\//.test(mime)) {
+        // Déduit le MIME du contenu stocké si possible (magic bytes PNG/JPEG/WEBP/GIF/PDF).
+        if (buf[0] === 0x89 && buf[1] === 0x50) mime = 'image/png';
+        else if (buf[0] === 0xff && buf[1] === 0xd8) mime = 'image/jpeg';
+        else if (buf[0] === 0x52 && buf[1] === 0x49) mime = 'image/webp';
+        else if (buf[0] === 0x47 && buf[1] === 0x49) mime = 'image/gif';
+        else continue;
+      }
+      out.push({ mimeType: mime, base64: buf.toString('base64'), bytes: buf.length });
+    } catch (e) {
+      console.warn('[API CHAT] pièce illisible', path.slice(0, 80), String((e && e.message) || e).slice(0, 120));
+    }
+  }
+  return out;
+}
+
+// Injecte les images dans le DERNIER message user (format OpenRouter vision).
+function injectImagesIntoMessages(messages, images) {
+  if (!images.length) return messages;
+  const copy = messages.map((m) => ({ ...m }));
+  for (let i = copy.length - 1; i >= 0; i--) {
+    if (copy[i] && copy[i].role === 'user') {
+      const text = typeof copy[i].content === 'string' ? copy[i].content : '';
+      copy[i].content = [{ type: 'text', text }, ...images.map((im) => ({
+        type: 'image_url',
+        image_url: { url: `data:${im.mimeType};base64,${im.base64}` },
+      }))];
+      break;
+    }
+  }
+  return copy;
+}
+
 app.post(['/api/chat', '/chat'], async (req, res) => {
   if (!checkRateLimit(req, res, 30)) return;
   const apiKey = (process.env.OPENROUTER_API_KEY || '').trim();
@@ -1278,15 +1387,107 @@ app.post(['/api/chat', '/chat'], async (req, res) => {
       detail: 'OPENROUTER_API_KEY manquant côté backend (functions/.env ou env Firebase).',
     });
   }
-  const { model, messages, temperature } = req.body || {};
+  const { model, messages, temperature, stream, imagePaths } = req.body || {};
+  let maxTokens = parseInt(String((req.body || {}).max_tokens || (req.body || {}).maxTokens || ''), 10);
+  if (!Number.isFinite(maxTokens)) maxTokens = 3500;
+  maxTokens = Math.min(Math.max(maxTokens, 50), 8000);
   if (!model || typeof model !== 'string' || model.length > 120) {
     return res.status(400).json({ error: 'model requis (string <= 120 car.)' });
   }
   if (!Array.isArray(messages) || messages.length === 0 || messages.length > 20) {
     return res.status(400).json({ error: 'messages[] requis (1..20)' });
   }
+  // Pièces jointes vision : résolues côté serveur, jamais d'URL signée.
+  let images = [];
+  if (Array.isArray(imagePaths) && imagePaths.length) {
+    if (!VISION_MODEL_RX.test(model)) {
+      console.warn(`[API CHAT] modèle sans vision (${String(model).slice(0, 60)}) : ${imagePaths.length} pièce(s) ignorée(s)`);
+    } else {
+      images = await resolveChatImages(imagePaths);
+      console.log(`[API CHAT] vision model=${String(model).slice(0, 60)} images=${images.length} octets=${images.reduce((n, im) => n + im.bytes, 0)}`);
+      if (imagePaths.length && !images.length) {
+        console.warn('[API CHAT] aucune pièce exploitable (introuvable ou non-image)');
+      }
+    }
+  }
+  const finalMessages = injectImagesIntoMessages(messages, images);
+  // Streaming SSE token-par-token (§1.3) : le front affiche dès le 1er token.
+  if (stream === true) {
+    try {
+      const upstream = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${apiKey}`,
+          'HTTP-Referer': process.env.APP_URL || 'https://dcintelligenceio.web.app',
+          'X-Title': 'DC Intelligence',
+        },
+        body: JSON.stringify({
+          model,
+          messages: finalMessages.map((m) => (typeof m.content === 'string'
+            ? { role: m.role, content: m.content.slice(0, 8000) }
+            : { role: m.role, content: m.content })),
+          temperature: typeof temperature === 'number' ? Math.min(Math.max(temperature, 0), 1) : 0.3,
+          max_tokens: maxTokens,
+          stream: true,
+        }),
+      });
+      if (!upstream.ok) {
+        const errTxt = await upstream.text().catch(() => '');
+        let detail = upstream.statusText;
+        try { detail = JSON.parse(errTxt).error.message || detail; } catch {}
+        if (upstream.status === 429) {
+          return res.status(429).json({ error: 'openrouter_429', detail: 'Quota OpenRouter atteint. Attendez ~1 minute ou changez de modèle.', retry_after_seconds: 60 });
+        }
+        return res.status(upstream.status === 400 ? 400 : 502).json({ error: `openrouter_${upstream.status}`, detail: String(detail).slice(0, 500) });
+      }
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache, no-transform',
+        Connection: 'keep-alive',
+        'X-Accel-Buffering': 'no',
+      });
+      const reader = upstream.body.getReader();
+      const decoder = new TextDecoder();
+      let clientGone = false;
+      req.on('close', () => { clientGone = true; try { reader.cancel(); } catch {} });
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done || clientGone) break;
+          const chunk = decoder.decode(value, { stream: true });
+          // Relaye uniquement les deltas utiles (plus heartbeat).
+          for (const line of chunk.split('\n')) {
+            const t = line.trim();
+            if (!t.startsWith('data:')) continue;
+            const payload = t.slice(5).trim();
+            if (payload === '[DONE]') { try { res.write('data: [DONE]\n\n'); } catch {} continue; }
+            try {
+              const obj = JSON.parse(payload);
+              const delta = obj && obj.choices && obj.choices[0] && obj.choices[0].delta;
+              const content = delta && typeof delta.content === 'string' ? delta.content : '';
+              const err = obj && obj.error ? String(obj.error.message || obj.error).slice(0, 300) : '';
+              if (err) { try { res.write(`data: ${JSON.stringify({ error: err })}\n\n`); } catch {} continue; }
+              if (content) { try { res.write(`data: ${JSON.stringify({ content })}\n\n`); } catch {} }
+            } catch {
+              // Ligne non-JSON (commentaire SSE) : ignorée.
+            }
+          }
+        }
+      } finally {
+        try { res.end(); } catch {}
+      }
+      return;
+    } catch (e) {
+      const msg = String((e && e.message) || 'upstream_unreachable');
+      console.error('[API CHAT] stream error', msg.slice(0, 300));
+      if (!res.headersSent) return res.status(502).json({ error: 'upstream_unreachable', detail: msg.slice(0, 300) });
+      try { res.end(); } catch {}
+      return;
+    }
+  }
   try {
-    const reply = await openRouterChat({ model, messages, temperature });
+    const reply = await openRouterChat({ model, messages: finalMessages, temperature, maxTokens });
     return res.status(200).json({ reply });
   } catch (e) {
     const status = (e && e.status) || 502;
@@ -1313,6 +1514,152 @@ app.post(['/api/chat', '/chat'], async (req, res) => {
     return res.status(502).json({ error: 'upstream_unreachable' });
   }
 });
+
+// === ORCHESTRATEUR UNIFIÉ : classification d'intention partagée ===
+// Miroir EXACT de la matrice routerAgent.ts (front) : même ordre, mêmes seuils.
+// Utilisée par le pipeline WhatsApp ET exposée via POST /api/route.
+// Le front web garde sa version TS (logique identique, contrainte : front inchangé).
+// agents backend : 'compta' | 'legal' | 'reco' | 'accueil' | 'humain'.
+function classifyIntentBackend(text, docType, confidence) {
+  const t = String(text || '').toLowerCase();
+  const conf = Number.isFinite(Number(confidence)) ? Number(confidence) : 0.6;
+  // 1. Multimodal d'abord (comme le front).
+  if (docType === 'invoice') return { domain: 'COMPTABILITÉ', agent: 'compta', confidence: conf };
+  if (docType === 'tax_notice' || docType === 'legal_contract') return { domain: 'JURIDIQUE_FISCAL', agent: 'legal', confidence: conf };
+  if (docType === 'bank_statement') return { domain: 'RAPPROCHEMENT', agent: 'reco', confidence: conf };
+  // 2. Humain explicite.
+  if (/\b(humain|humaine|conseiller|conseillère|conseillere|agent humain|vraie personne|vrai personne|personne réelle|être humain)\b/.test(t)) {
+    return { domain: 'HUMAIN', agent: 'humain', confidence: 0.9 };
+  }
+  // 3. Juridique PRIORITAIRE (avant compta).
+  if (/\b(cgi|code\s+général\s+des\s+impôts|livre\s+de\s+proc[eé]dure|article\s*\d+|art\.\s*\d+|sanction|pénalit|penalit|obligation|d[eé]claration|d[eé]clarative|échéance|echeance|code\s+du\s+travail)\b/.test(t)) {
+    return { domain: 'JURIDIQUE_FISCAL', agent: 'legal', confidence: 0.93 };
+  }
+  // 4. Sigles fiscaux.
+  if (/\b(imf|ifu|rccm)\b/.test(t)) {
+    return { domain: 'JURIDIQUE_FISCAL', agent: 'legal', confidence: 0.85 };
+  }
+  // 5. Juridique général.
+  if (/legal[\s_-]*flow|legalflow|\b(contentieux|conformité|conformite|fiscal|dgi|impôt|impot|statuts|contrat|bail|das|cnps|patente|airsi|retenue|télédéclaration|e-impots|juridique)\b/.test(t)) {
+    return { domain: 'JURIDIQUE_FISCAL', agent: 'legal', confidence: 0.9 };
+  }
+  // 6. Rapprochement.
+  if (/\b(rapprochement|relevé|releve|banque|ecobank|sgbci|bicici|pointage|solde|521|écart|ecart)\b/.test(t)) {
+    return { domain: 'RAPPROCHEMENT', agent: 'reco', confidence: 0.9 };
+  }
+  // 7. Comptabilité stricte (tva/vente/ttc génériques exclus, comme le front).
+  if (/\b(compta|comptables?|facture|écriture|ecriture|syscohada|ht|ttc|601|401|411|achat|journal|imputation|bilan|balance|grand\s+livre)\b/.test(t)) {
+    return { domain: 'COMPTABILITÉ', agent: 'compta', confidence: 0.9 };
+  }
+  // 8. TVA seule à caractère fiscal.
+  if (/\btva\b/.test(t) && /\b(vente|prestation|collectée|déductible|exonération)\b/.test(t) && !/\b(écriture|imputation|journal|601|401)\b/.test(t)) {
+    return { domain: 'JURIDIQUE_FISCAL', agent: 'legal', confidence: 0.82 };
+  }
+  // 9. Vague.
+  if (t.length < 8) return { domain: 'ACCUEIL', agent: 'accueil', confidence: 0.5 };
+  // 10. Défaut.
+  return { domain: 'AUTRE', agent: 'compta', confidence: 0.75 };
+}
+
+app.post(['/api/route', '/route'], async (req, res) => {
+  if (!checkRateLimit(req, res, 30)) return;
+  const { text, docType, confidence } = req.body || {};
+  if (typeof text !== 'string' || !text.trim()) {
+    return res.status(400).json({ error: 'text requis' });
+  }
+  return res.status(200).json({ ok: true, ...classifyIntentBackend(text.slice(0, 2000), docType, confidence) });
+});
+
+// === ORCHESTRATEUR UNIFIÉ : validation comptable 7-checks côté backend ===
+// Miroir déterministe de accountingValidator.ts (front) pour le canal WhatsApp.
+// Retourne { ok, checksPassed, totalChecks: 7, erreurs[], alertes[], corrections[] }.
+// ok = aucune ERREUR (les alertes n'empêchent pas ok=true).
+function validateComptaProposalBackend(p) {
+  const erreurs = [];
+  const alertes = [];
+  const corrections = [];
+  let checksPassed = 0;
+  const totalChecks = 7;
+  const lines = p && Array.isArray(p.ecriture) ? p.ecriture : [];
+  // 1. Format.
+  if (!p || !Array.isArray(p.ecriture) || !lines.length) {
+    erreurs.push('ÉCRITURE MAL FORMÉE : aucune ligne.');
+  } else checksPassed++;
+  // 2. Comptes SYSCOHADA (regex stricte + nomenclature).
+  let comptesOk = lines.length > 0;
+  for (const l of lines) {
+    const c = String((l && l.compte) || '').replace(/\D/g, '');
+    if (!/^[1-8][0-9]{1,7}$/.test(String((l && l.compte) || ''))) {
+      erreurs.push(`COMPTE INVALIDE : ${String((l && l.compte) || '—')} n'existe pas au plan SYSCOHADA.`);
+      comptesOk = false;
+    }
+    void c;
+  }
+  if (comptesOk) checksPassed++;
+  // Tiers collectif 401/411 sans tiers.
+  const hasCollectif = lines.some((l) => /^(401|411)/.test(String((l && l.compte) || '').replace(/\D/g, '')));
+  if (hasCollectif && !(p.tiersCode || p.tiers)) {
+    alertes.push('COMPTE TIERS MANQUANT : ligne 401/411 sans code tiers.');
+  }
+  // 3. Équilibre D = C, tolérance 0.
+  const sumD = lines.reduce((n, l) => n + (Math.round(Number((l && l.debit) || 0) * 100) / 100), 0);
+  const sumC = lines.reduce((n, l) => n + (Math.round(Number((l && l.credit) || 0) * 100) / 100), 0);
+  if (Math.abs(sumD - sumC) > 0.001 || sumD <= 0) {
+    erreurs.push(`DÉSÉQUILIBRE : Débits ${sumD} ≠ Crédits ${sumC} (tolérance 0).`);
+  } else checksPassed++;
+  // 4. TVA 18 % / 9 %.
+  const ht = Number(p.montantHT) || 0;
+  const tva = Number(p.montantTVA) || 0;
+  if (ht > 0 && tva > 0) {
+    const ratio = tva / ht;
+    if (Math.abs(ratio - 0.18) < 0.02 || Math.abs(ratio - 0.09) < 0.02) checksPassed++;
+    else alertes.push(`TAUX TVA ANORMAL : ${(ratio * 100).toFixed(1)} % (attendu 18 % ou 9 %).`);
+  } else checksPassed++;
+  // 5. Seuil immobilisation 50 000 FCFA (6056/6058).
+  let seuilOk = true;
+  for (const l of lines) {
+    const c = String((l && l.compte) || '').replace(/\D/g, '');
+    if ((c.startsWith('6056') || c.startsWith('6058')) && Number((l && l.debit) || 0) > 50000) {
+      alertes.push(`SEUIL IMMOBILISATION : ${Number(l.debit).toLocaleString('fr-FR')} FCFA sur ${c} — envisager la Classe 2.`);
+      seuilOk = false;
+    }
+  }
+  if (seuilOk) checksPassed++;
+  // 6. Gérant majoritaire 6611 -> 6622 (correction automatique).
+  let gerantOk = true;
+  const tiersTxt = String((p && p.tiers) || '');
+  for (const l of lines) {
+    const c = String((l && l.compte) || '');
+    if (/gérant|gerant|associé unique|associe unique|directeur général/i.test(tiersTxt) && /^6611/.test(c)) {
+      corrections.push({ champ: `compte_${c}`, avant: c, apres: '6622', motif: 'Rémunération du gérant majoritaire (SYSCOHADA)' });
+      alertes.push('CORRECTION AUTOMATIQUE : compte gérant 6611 -> 6622.');
+      gerantOk = false;
+    }
+  }
+  if (gerantOk) checksPassed++;
+  // 7. Mentions légales facture.
+  const manquants = [];
+  const mentions = (p && p.mentions) || {};
+  if (!(mentions.rccm || mentions.cc || mentions.ncc || p.rccm)) manquants.push('RCCM/CC');
+  if (!(mentions.date || p.date)) manquants.push('date');
+  if (!(mentions.reference || p.reference)) manquants.push('référence');
+  if (!(mentions.tiers || p.tiers)) manquants.push('tiers');
+  if (!manquants.length) checksPassed++;
+  else alertes.push(`MENTIONS LÉGALES MANQUANTES : ${manquants.join(', ')}.`);
+  // Bloquants hors compteur : proforma + montant.
+  const refTxt = `${p.reference || ''} ${p.typePiece || ''}`;
+  if (/^P\d/i.test(String(p.reference || '').trim()) || /proforma/i.test(refTxt)) {
+    erreurs.push('PROFORMA BLOQUÉE : une facture proforma ne se comptabilise jamais.');
+  }
+  if (!((Number(p.montantHT) || 0) > 0 || (Number(p.montantTTC) || 0) > 0)) {
+    erreurs.push('MONTANT INVALIDE : HT et TTC sont à zéro.');
+  }
+  const validJournals = ['ACH', 'VEN', 'BQ', 'CSE', 'OD', 'AN', 'IM', 'BGF', 'BOA', 'BGFI'];
+  if (p.journal && !validJournals.includes(String(p.journal).toUpperCase())) {
+    alertes.push(`JOURNAL INCONNU : ${String(p.journal).slice(0, 20)}.`);
+  }
+  return { ok: erreurs.length === 0, checksPassed, totalChecks, erreurs, alertes, corrections };
+}
 
 // --- Proxy MCP : le front n'a jamais le MCP_TOKEN, tout passe par le backend ---
 // POST /api/mcp/call { software: 'Legal Flow'|'Compta Flow'|'RECO', toolName, arguments, permissionLevel }
@@ -1355,6 +1702,239 @@ app.post(['/api/mcp/call', '/mcp/call'], async (req, res) => {
     }
     return res.status(502).json({ error: 'mcp_unreachable', detail: msg.slice(0, 500) });
   }
+});
+
+// ============ SERVEUR MCP ENTRANT (Legal Flow nous appelle) ============
+// POST /api/mcp — JSON-RPC 2.0 : initialize / tools/list / tools/call (+ ping).
+// Auth : Authorization: Bearer <MCP_TOKEN> (même secret, fourni hors bande).
+// FAIL CLOSED : sans MCP_TOKEN configuré → 503, jamais de données servies.
+// Principe d'honnêteté : seules les données RÉELLEMENT détenues (collections
+// Firestore ci-dessous) sont renvoyées ; le reste est null/[] avec motif dans
+// `couverture`. Jamais de simulation.
+function mcpCheckAuth(authHeader, id) {
+  const configured = (process.env.MCP_TOKEN || '').trim();
+  if (!configured) {
+    return { ok: false, httpStatus: 503, payload: { jsonrpc: '2.0', id, error: { code: -32000, message: 'backend_not_configured: MCP_TOKEN manquant côté backend.' } } };
+  }
+  const m = String(authHeader || '').trim().match(/^Bearer\s+(.+)$/i);
+  const token = m ? m[1].trim() : '';
+  let ok = false;
+  try {
+    const a = Buffer.from(token);
+    const b = Buffer.from(configured);
+    ok = a.length === b.length && crypto.timingSafeEqual(a, b);
+  } catch { ok = false; }
+  if (!ok) {
+    return { ok: false, httpStatus: 401, payload: { jsonrpc: '2.0', id, error: { code: -32001, message: 'unauthorized: Bearer MCP_TOKEN invalide.' } } };
+  }
+  return { ok: true };
+}
+
+const digitsOnly = (s) => String(s || '').replace(/\D/g, '');
+
+async function mcpReadUserData(userId) {
+  // user_id accepté comme : id doc, téléphone (format libre, comparé en chiffres),
+  // ou email. Retourne { waConv, waList, signals, events } (Firestore ou mémoire).
+  const key = str(userId, 80).trim();
+  const keyDigits = digitsOnly(key);
+  let waConv = null;
+  let waList = [];
+  let signals = null;
+  let events = [];
+  if (db) {
+    try {
+      const snap = await withDb(db.collection('wa_conversations').doc(key).get(), 'mcp:waConv');
+      if (snap.exists) waConv = { phone: snap.id, ...snap.data() };
+    } catch {}
+    if (!waConv && keyDigits) {
+      try {
+        const snap = await withDb(db.collection('wa_conversations').orderBy('updatedAt', 'desc').limit(200).get(), 'mcp:waScan');
+        const found = snap.docs.map((d) => ({ phone: d.id, ...d.data() }))
+          .find((c) => digitsOnly(c.phone) === keyDigits || digitsOnly(c.phone).endsWith(keyDigits) || (keyDigits && keyDigits.endsWith(digitsOnly(c.phone))));
+        if (found) waConv = found;
+        waList = snap.docs.map((d) => ({ phone: d.id, ...d.data() }));
+      } catch {}
+    } else if (db) {
+      try {
+        const snap = await withDb(db.collection('wa_conversations').orderBy('updatedAt', 'desc').limit(200).get(), 'mcp:waList');
+        waList = snap.docs.map((d) => ({ phone: d.id, ...d.data() }));
+      } catch {}
+    }
+    try {
+      const s = await withDb(db.collection('user_signals').doc(key).get(), 'mcp:signals');
+      if (s.exists) signals = s.data();
+    } catch {}
+    try {
+      const es = await withDb(db.collection('wa_events').orderBy('createdAt', 'desc').limit(200).get(), 'mcp:events');
+      const all = es.docs.map((d) => d.data());
+      const scope = waConv ? digitsOnly(waConv.phone) : keyDigits;
+      events = all.filter((e) => scope && digitsOnly(e.phone) === scope).slice(0, 5);
+    } catch {}
+  } else {
+    const mem = memoryStore.wa_conversations || [];
+    waConv = mem.find((x) => String(x.phone) === key)
+      || (keyDigits ? mem.find((x) => digitsOnly(x.phone) === keyDigits) : null)
+      || null;
+    waList = mem.slice(0, 200);
+    signals = (memoryStore.user_signals || []).find((x) => String(x.userId) === key) || null;
+    const memEvents = memoryStore.wa_events || [];
+    const scope = waConv ? digitsOnly(waConv.phone) : keyDigits;
+    events = memEvents.filter((e) => scope && digitsOnly(e.phone) === scope).slice(0, 5);
+  }
+  return { waConv, waList, signals, events };
+}
+
+// Outil demandé par Legal Flow : profil complet utilisateur niveau 1.
+// Les blocs SANS équivalent côté DC (profiles, entreprises, notifications,
+// veille) sont renvoyés null/[] avec motif dans `couverture` — jamais inventés.
+async function mcpToolUserFullProfile(args) {
+  const userId = str((args || {}).user_id, 80).trim();
+  // Pas de session authentifiée côté DC (token de service partagé) : user_id requis.
+  if (!userId) {
+    throw Object.assign(new Error('user_id requis (id, téléphone ou email). Aucune session authentifiée par défaut côté DC Intelligence (token de service partagé).'), { jsonCode: -32602 });
+  }
+  const { waConv, waList, signals, events } = await mcpReadUserData(userId);
+  const now = new Date().toISOString();
+  const scope = waConv ? digitsOnly(waConv.phone) : digitsOnly(userId);
+  const mine = waList.filter((c) => scope && digitsOnly(c.phone) === scope).slice(0, 15);
+  const stamps = [
+    waConv && waConv.updatedAt,
+    signals && signals.updatedAt,
+    ...events.map((e) => e.createdAt),
+    ...mine.map((c) => c.updatedAt),
+  ].filter(Boolean).sort();
+  const lastActivity = stamps.length ? stamps[stamps.length - 1] : null;
+  const lastMs = lastActivity ? Date.parse(lastActivity) : NaN;
+  const statut = !lastActivity || Number.isNaN(lastMs)
+    ? 'inconnu'
+    : (Date.now() - lastMs < 30 * 24 * 3600 * 1000 ? 'actif' : 'inactif');
+  return {
+    content: [{
+      type: 'text',
+      text: JSON.stringify({
+        tool: 'lf_get_user_full_profile',
+        user_id: userId,
+        store: db ? 'firestore' : 'memory',
+        generated_at: now,
+        profil_base: {
+          id: userId,
+          role: 'entreprise',
+          statut,
+          nom_complet: null,
+          email: null,
+          cabinet_id: null,
+          entreprise_id: null,
+          derniere_activite: lastActivity,
+        },
+        entreprise_details: {
+          raison_sociale: null,
+          secteur: null,
+          regime_fiscal: null,
+          effectif: null,
+          ca_estime: null,
+          profil_complet: false,
+        },
+        declarations_en_cours: [],
+        score_conformite: null,
+        echeancier_a_valider: [],
+        notifications_recentes: [],
+        veille_reglementaire_non_lue: [],
+        journal_evenements: events.map((e) => ({
+          direction: e.direction,
+          kind: e.kind,
+          preview: e.preview,
+          state: e.state,
+          status: e.status || null,
+          code: e.code || null,
+          created_at: e.createdAt || null,
+        })),
+        signaux_utilisateur: signals ? {
+          frustrationCount: Number(signals.frustrationCount) || 0,
+          clarificationCount: Number(signals.clarificationCount) || 0,
+          updatedAt: signals.updatedAt || null,
+        } : null,
+        conversations_whatsapp: mine.map((c) => ({
+          phone: String(c.phone),
+          topic: c.topic || null,
+          intent: c.intent || null,
+          stage: c.stage || null,
+          currentAgent: c.currentAgent || null,
+          messageCount: Number(c.messageCount) || 0,
+          updatedAt: c.updatedAt || null,
+          derniers_messages: Array.isArray(c.lastMessages) ? c.lastMessages.slice(-5).map((m) => ({
+            from: m.from, text: m.text, at: m.at,
+          })) : [],
+        })),
+        couverture: {
+          profiles: 'absent — aucune table profils côté DC (les profils entreprise sont lus par DC via Legal Flow get_user_context, sens inverse)',
+          entreprises: 'absent — aucune table entreprises côté DC',
+          journal_evenements: events.length ? `partiel — wa_events (${events.length} derniers)` : 'vide — aucun événement pour cet utilisateur',
+          notifications: 'absent — aucune table notifications côté DC',
+          veille_lectures: 'absent — aucune table veille côté DC',
+          whatsapp_sessions: mine.length ? `complet — wa_conversations (${mine.length} session(s))` : 'vide — aucune session WhatsApp pour cet utilisateur',
+        },
+      }),
+    }],
+  };
+}
+
+const MCP_SERVER_TOOLS = {
+  lf_get_user_full_profile: {
+    description: 'Profil complet utilisateur niveau 1 (rôle entreprise) : base, entreprise, déclarations, score conformité, échéancier, notifications, veille, journal (5 derniers), signaux, 15 dernières conversations WhatsApp. Blocs sans équivalent renvoyés null/[] avec motif (couverture).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        user_id: { type: 'string', description: 'Optionnel. id, téléphone ou email. Sans user_id : erreur (aucune session authentifiée par défaut, token de service partagé).' },
+      },
+    },
+    handler: mcpToolUserFullProfile,
+  },
+};
+
+async function mcpDispatch(body, authHeader) {
+  const id = body && body.id !== undefined ? body.id : null;
+  if (!body || body.jsonrpc !== '2.0' || typeof body.method !== 'string') {
+    return { httpStatus: 400, payload: { jsonrpc: '2.0', id, error: { code: -32600, message: 'Requête JSON-RPC 2.0 invalide (jsonrpc + method requis).' } } };
+  }
+  const auth = mcpCheckAuth(authHeader, id);
+  if (!auth.ok) return { httpStatus: auth.httpStatus, payload: auth.payload };
+  try {
+    if (body.method === 'initialize') {
+      return { httpStatus: 200, payload: { jsonrpc: '2.0', id, result: { protocolVersion: '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'dc-intelligence-mcp', version: '0.4.0' } } } };
+    }
+    if (body.method === 'tools/list') {
+      return { httpStatus: 200, payload: { jsonrpc: '2.0', id, result: { tools: Object.entries(MCP_SERVER_TOOLS).map(([name, t]) => ({ name, description: t.description, inputSchema: t.inputSchema })) } } };
+    }
+    if (body.method === 'tools/call') {
+      const params = body.params || {};
+      const tool = MCP_SERVER_TOOLS[params.name];
+      if (!tool) {
+        return { httpStatus: 404, payload: { jsonrpc: '2.0', id, error: { code: -32601, message: `Outil inconnu : ${str(params.name, 80)}.` } } };
+      }
+      const started = Date.now();
+      try {
+        const result = await tool.handler(params.arguments || {});
+        console.log(`[MCP-IN] tool=${params.name} ok latency=${Date.now() - started}ms`);
+        return { httpStatus: 200, payload: { jsonrpc: '2.0', id, result } };
+      } catch (e) {
+        console.warn('[MCP-IN] tool error', String(params.name).slice(0, 60), String((e && e.message) || e).slice(0, 150));
+        return { httpStatus: 200, payload: { jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: JSON.stringify({ ok: false, tool: params.name, error: String((e && e.message) || 'tool_failed').slice(0, 300) }) }], isError: true } } };
+      }
+    }
+    if (body.method === 'ping') {
+      return { httpStatus: 200, payload: { jsonrpc: '2.0', id, result: {} } };
+    }
+    return { httpStatus: 404, payload: { jsonrpc: '2.0', id, error: { code: -32601, message: `Méthode inconnue : ${str(body.method, 80)}.` } } };
+  } catch (e) {
+    console.error('[MCP-IN]', String((e && e.message) || e).slice(0, 200));
+    return { httpStatus: 500, payload: { jsonrpc: '2.0', id, error: { code: -32603, message: 'Erreur interne.' } } };
+  }
+}
+
+app.post(['/api/mcp', '/mcp'], async (req, res) => {
+  if (!checkRateLimit(req, res, 20)) return;
+  const out = await mcpDispatch(req.body || {}, String(req.headers.authorization || ''));
+  return res.status(out.httpStatus).json(out.payload);
 });
 
 // --- Transcription audio via Groq Whisper (clé serveur). Front : POST /api/transcribe ---
@@ -2177,6 +2757,26 @@ function cosineSim(a, b) {
   return dot / (Math.sqrt(na) * Math.sqrt(nb));
 }
 
+// Repli LEXICAL (zéro crédit requis) : quand les embeddings sont indisponibles
+// (402 sans crédits, 429...), la recherche se fait par recouvrement de termes
+// normalisés (minuscules, sans accents, mots > 2 lettres, hors mots vides FR/EN).
+// Seuil : >= 1/3 des termes de la question retrouvés dans le chunk.
+const RAG_STOPWORDS = new Set(('le,la,les,de,des,du,un,une,et,est,sont,avec,pour,dans,par,sur,au,aux,ce,cette,ces,il,elle,ils,elles,nous,vous,je,tu,que,qui,quoi,comment,quel,quelle,quels,quelles,avez,etre,avoir,faire,pas,plus,moins,tres,aussi,dont,ou,mais,donc,or,ni,car,comme,tout,tous,toute,toutes,notre,nos,votre,vos,leur,leurs,mon,ton,son,sa,ses,mes,tes,lors,lorsque,entre,vers,sous,sans,chez,the,and,for,are,was,were,has,have,avec').split(','));
+const RAG_LEXICAL_MIN_SCORE = 0.34;
+function normTerms(s) {
+  return String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .split(/[^a-z0-9]+/).filter((w) => w.length > 2 && !RAG_STOPWORDS.has(w));
+}
+function lexicalScore(query, text) {
+  const q = [...new Set(normTerms(query))];
+  if (!q.length) return 0;
+  const t = new Set(normTerms(text));
+  if (!t.size) return 0;
+  let hit = 0;
+  for (const w of q) if (t.has(w)) hit++;
+  return hit / q.length;
+}
+
 async function embedTexts(texts) {
   const apiKey = (process.env.OPENROUTER_API_KEY || '').trim();
   if (!apiKey) throw Object.assign(new Error('backend_not_configured: OPENROUTER_API_KEY manquant'), { status: 503 });
@@ -2241,14 +2841,29 @@ async function readDocChunks(docId, limit) {
   return all.slice(0, n);
 }
 
-// Indexe un texte : chunks -> embeddings -> stockage. Retourne {chunkCount, truncated}.
-// Ne lève jamais de secret ; toute erreur remonte avec un code (statut pending + motif).
+// Indexe un texte en DEUX phases : (1) chunks texte TOUJOURS persistés (recherche
+// lexicale possible sans crédits) ; (2) vecteurs best-effort (402 sans crédits,
+// 429...). Retourne { chunkCount, truncated, vectorsOk, vectorError }.
+// Sans vecteurs, le doc reste interrogeable en LEXICAL (statut pending + motif).
 async function indexDocumentText(docId, text) {
   const chunks = chunkText(text).slice(0, RAG_MAX_CHUNKS_PER_DOC);
   if (!chunks.length) throw Object.assign(new Error('texte_vide'), { status: 400 });
-  const vectors = await embedTexts(chunks);
-  await storeDocChunks(docId, chunks.map((t, i) => ({ text: t, embedding: vectors[i] })));
-  return { chunkCount: chunks.length, truncated: chunkText(text).length > chunks.length };
+  const truncated = chunkText(text).length > chunks.length;
+  // Phase 1 (infaillible) : textes persistés, utilisables en recherche lexicale.
+  await storeDocChunks(docId, chunks.map((t) => ({ text: t, embedding: null })));
+  // Phase 2 (best-effort) : vecteurs. Échec -> pending + motif honnête, chunks gardés.
+  try {
+    const vectors = await embedTexts(chunks);
+    await storeDocChunks(docId, chunks.map((t, i) => ({ text: t, embedding: vectors[i] || null })));
+    return { chunkCount: chunks.length, truncated, vectorsOk: true, vectorError: '' };
+  } catch (e) {
+    return {
+      chunkCount: chunks.length,
+      truncated,
+      vectorsOk: false,
+      vectorError: String((e && e.message) || 'embeddings_indisponibles').slice(0, 200),
+    };
+  }
 }
 
 async function setDocIndexState(docId, patch) {
@@ -2316,6 +2931,40 @@ app.post(['/api/knowledge/seed', '/knowledge/seed'], async (req, res) => {
   }
 });
 
+// Extraction du texte indexable selon le type MIME réel (§7 : upload = indexation réelle).
+// Retourne { text, reason } — text vide = non indexable, avec motif honnête (jamais de mensonge).
+// Utilisée par l'upload ET la réindexation (même code, pas de divergence).
+async function extractIndexableText(buf, mimeType, name) {
+  const lower = String(name || '').toLowerCase();
+  const mime = String(mimeType || '');
+  const isText = /^(text\/|application\/(json|csv|x-www-form-urlencoded))/.test(mime) || /\.(txt|md|csv|json)$/i.test(lower);
+  if (isText) return { text: buf.toString('utf8').slice(0, 200000), reason: '' };
+  if (mime === 'application/pdf' || /\.pdf$/i.test(lower)) {
+    try {
+      const pdfParse = require('pdf-parse');
+      const parsed = await pdfParse(buf);
+      const t = String((parsed && parsed.text) || '').replace(/\s+/g, ' ').trim().slice(0, 200000);
+      if (t.length >= 20) return { text: t, reason: '' };
+      return { text: '', reason: 'PDF sans texte extractible (document scanné ?)' };
+    } catch (e) {
+      return { text: '', reason: 'extraction PDF impossible : ' + String((e && e.message) || e).slice(0, 120) };
+    }
+  }
+  if (/^image\//.test(mime)) {
+    const ork = (process.env.OPENROUTER_API_KEY || '').trim();
+    if (!ork) return { text: '', reason: 'VLM indisponible (OPENROUTER_API_KEY manquant)' };
+    try {
+      const v = await visionClassifyBuffer(buf, mime, String(name || 'image'));
+      const t = `Image ${name} : ${v.extractedText || ''} ${JSON.stringify(v.entities || {})}`.trim().slice(0, 200000);
+      if (t.length >= 20) return { text: t, reason: '' };
+      return { text: '', reason: 'VLM sans extraction exploitable' };
+    } catch (e) {
+      return { text: '', reason: 'analyse VLM impossible : ' + String((e && e.message) || e).slice(0, 120) };
+    }
+  }
+  return { text: '', reason: 'extraction non supportée (texte, PDF ou image uniquement)' };
+}
+
 app.post(['/api/knowledge/upload', '/knowledge/upload'], async (req, res) => {
   if (!checkRateLimit(req, res, 10)) return;
   const { name, mimeType, base64, category } = req.body || {};
@@ -2337,10 +2986,20 @@ app.post(['/api/knowledge/upload', '/knowledge/upload'], async (req, res) => {
   } catch (e) {
     console.warn('[KNOWLEDGE] Storage indisponible, métadonnées seules', String((e && e.message) || e).slice(0, 200));
   }
-  const lower = cleanName.toLowerCase();
-  const isText = /^(text\/|application\/(json|csv|x-www-form-urlencoded))/.test(mime) || /\.(txt|md|csv|json)$/i.test(lower);
   const now = new Date().toISOString();
-  const fullText = isText ? buf.toString('utf8').slice(0, 200000) : '';
+  // §7 : tout fichier stocké est réellement extrait (texte, PDF, image VLM),
+  // jamais indexé depuis du binaire brut.
+  let indexText = '';
+  let extractReason = '';
+  if (stored) {
+    try {
+      const ext = await extractIndexableText(buf, mime, cleanName);
+      indexText = ext.text;
+      extractReason = ext.reason;
+    } catch (e) {
+      extractReason = 'extraction impossible : ' + String((e && e.message) || e).slice(0, 120);
+    }
+  }
   const row = {
     title: cleanName.replace(/\.[^/.]+$/, '').slice(0, 120) || cleanName.slice(0, 120),
     category: str(category, 60) || 'RÉFÉRENCES',
@@ -2350,9 +3009,9 @@ app.post(['/api/knowledge/upload', '/knowledge/upload'], async (req, res) => {
     storagePath: stored ? storagePath : null,
     status: 'pending',
     chunkCount: 0,
-    indexReason: stored ? (isText ? 'indexation en cours' : 'extraction non supportée (texte uniquement : .txt/.md/.csv/.json)') : 'fichier non stocké — réessayez',
+    indexReason: stored ? (indexText.trim().length >= 20 ? 'indexation en cours' : (extractReason || 'extraction sans texte exploitable')) : 'fichier non stocké — réessayez',
     summary: `Document importé : ${cleanName}.${stored ? '' : ' (fichier non stocké — réessayez)'}`,
-    textPreview: isText ? buf.toString('utf8').slice(0, 4000) : '',
+    textPreview: indexText.slice(0, 4000),
     lastUpdated: now,
     createdAt: now,
   };
@@ -2362,19 +3021,32 @@ app.post(['/api/knowledge/upload', '/knowledge/upload'], async (req, res) => {
   } catch (e) {
     return res.status(500).json({ error: 'knowledge_save_failed' });
   }
-  // Indexation réelle (chunks + embeddings) : le statut ne passe à 'indexed'
-  // que si les vecteurs sont stockés. Échec -> 'pending' + motif, jamais de mensonge.
-  if (stored && fullText.trim().length >= 20) {
+  // Indexation réelle : chunks texte TOUJOURS persistés ; 'indexed'/'partial' seulement
+  // si les vecteurs sont stockés, sinon 'pending' + motif MAIS chunks gardés
+  // (recherche lexicale active, zéro crédit requis). Jamais de mensonge.
+  if (stored && indexText.trim().length >= 20) {
+    const fullText = indexText;
     try {
-      const { chunkCount, truncated } = await indexDocumentText(id, fullText);
-      Object.assign(
-        row,
-        await setDocIndexState(id, {
-          status: truncated ? 'partial' : 'indexed',
-          chunkCount,
-          indexReason: truncated ? `texte tronqué à ${chunkCount} chunks (plafond anti-coût)` : '',
-        })
-      );
+      const { chunkCount, truncated, vectorsOk, vectorError } = await indexDocumentText(id, fullText);
+      if (vectorsOk) {
+        Object.assign(
+          row,
+          await setDocIndexState(id, {
+            status: truncated ? 'partial' : 'indexed',
+            chunkCount,
+            indexReason: truncated ? `texte tronqué à ${chunkCount} chunks (plafond anti-coût)` : '',
+          })
+        );
+      } else {
+        Object.assign(
+          row,
+          await setDocIndexState(id, {
+            status: 'pending',
+            chunkCount,
+            indexReason: `vecteurs en attente (${vectorError}) — recherche par mots-clés active`,
+          })
+        );
+      }
     } catch (e) {
       const msg = String((e && e.message) || 'indexation_echec');
       Object.assign(row, await setDocIndexState(id, { status: 'pending', chunkCount: 0, indexReason: msg.slice(0, 200) }));
@@ -2391,7 +3063,6 @@ app.post(['/api/knowledge/search', '/knowledge/search'], async (req, res) => {
   const topK = Math.min(Math.max(parseInt(String((req.body || {}).topK || '3'), 10) || 3, 1), 5);
   if (query.length < 3) return res.status(400).json({ error: 'query requis (>= 3 car.)' });
   try {
-    const [qVec] = await embedTexts([query]);
     let docs = [];
     if (db) {
       const snap = await db.collection('knowledge_documents').limit(50).get();
@@ -2399,27 +3070,98 @@ app.post(['/api/knowledge/search', '/knowledge/search'], async (req, res) => {
     } else {
       docs = memoryStore.knowledge.slice(0, 50);
     }
+    // Voie vectorielle d'abord ; repli LEXICAL automatique si les embeddings
+    // sont indisponibles (402 sans crédits, 429, clé absente...). Même format.
+    let qVec = null;
+    let mode = 'vectoriel';
+    try {
+      const vecs = await embedTexts([query]);
+      qVec = vecs[0];
+    } catch (e) {
+      mode = 'lexical';
+      console.warn('[RAG] embeddings indisponibles, repli lexical', String((e && e.message) || e).slice(0, 120));
+    }
     const scored = [];
     for (const d of docs) {
-      if (d.status !== 'indexed' && d.status !== 'partial') continue;
+      if (d.status === 'reference') continue;
       const chunks = await readDocChunks(d.id, 200).catch(() => []);
       for (const c of chunks) {
-        if (!c || !Array.isArray(c.embedding)) continue;
-        const score = cosineSim(qVec, c.embedding);
-        if (score >= RAG_MIN_SCORE) {
-          scored.push({ docId: d.id, title: String(d.title || ''), chunk: String(c.text || '').slice(0, 800), score: Math.round(score * 1000) / 1000 });
+        const txt = String((c && c.text) || '');
+        if (!txt) continue;
+        if (qVec && Array.isArray(c.embedding)) {
+          const score = cosineSim(qVec, c.embedding);
+          if (score >= RAG_MIN_SCORE) {
+            scored.push({ docId: d.id, title: String(d.title || ''), chunk: txt.slice(0, 800), score: Math.round(score * 1000) / 1000 });
+          }
+        } else if (!qVec) {
+          const score = lexicalScore(query, txt);
+          if (score >= RAG_LEXICAL_MIN_SCORE) {
+            scored.push({ docId: d.id, title: String(d.title || ''), chunk: txt.slice(0, 800), score: Math.round(score * 1000) / 1000, lexical: true });
+          }
         }
       }
       if (scored.length > 500) break;
     }
     scored.sort((a, b) => b.score - a.score);
-    return res.status(200).json({ ok: true, results: scored.slice(0, topK) });
+    return res.status(200).json({ ok: true, mode, results: scored.slice(0, topK) });
   } catch (e) {
     const msg = String((e && e.message) || 'search_unreachable');
     if (/^backend_not_configured/.test(msg)) {
       return res.status(503).json({ error: 'backend_not_configured', detail: 'OPENROUTER_API_KEY manquant côté backend.' });
     }
     return res.status(502).json({ error: 'knowledge_search_failed', detail: msg.slice(0, 200) });
+  }
+});
+
+// Statut du pipeline RAG (§7) : documents indexés, dernière indexation, pipeline.
+// GET /api/knowledge/status -> { total, indexed, partial, pending, reference,
+// totalChunks, lastIndexedAt, pipeline:{...} }.
+app.get(['/api/knowledge/status', '/knowledge/status'], async (req, res) => {
+  if (!checkRateLimit(req, res, 20)) return;
+  try {
+    let docs = [];
+    if (db) {
+      const snap = await db.collection('knowledge_documents').limit(200).get();
+      docs = snap.docs.map((d) => d.data());
+    } else {
+      docs = memoryStore.knowledge || [];
+    }
+    const counts = { indexed: 0, partial: 0, pending: 0, reference: 0, other: 0 };
+    let totalChunks = 0;
+    let lastIndexedAt = null;
+    let searchable = 0;
+    for (const d of docs) {
+      const s = String((d && d.status) || '');
+      if (counts[s] !== undefined) counts[s]++;
+      else counts.other++;
+      totalChunks += Number((d && d.chunkCount) || 0);
+      // Interrogeable : vecteurs (indexed/partial) OU chunks texte (pending avec
+      // chunks, recherche lexicale sans crédits).
+      if (s === 'indexed' || s === 'partial' || (s === 'pending' && Number((d && d.chunkCount) || 0) > 0)) {
+        searchable++;
+      }
+      if ((s === 'indexed' || s === 'partial') && d && d.lastUpdated && (!lastIndexedAt || d.lastUpdated > lastIndexedAt)) {
+        lastIndexedAt = d.lastUpdated;
+      }
+    }
+    return res.status(200).json({
+      ok: true,
+      store: db ? 'firestore' : 'memory',
+      total: docs.length,
+      searchable,
+      ...counts,
+      totalChunks,
+      lastIndexedAt,
+      pipeline: {
+        embedModel: RAG_EMBED_MODEL,
+        chunkSize: RAG_CHUNK_SIZE,
+        overlap: RAG_CHUNK_OVERLAP,
+        maxChunks: RAG_MAX_CHUNKS_PER_DOC,
+        minScore: RAG_MIN_SCORE,
+      },
+    });
+  } catch (e) {
+    return res.status(500).json({ error: 'knowledge_status_failed', detail: String((e && e.message) || e).slice(0, 200) });
   }
 });
 
@@ -2441,17 +3183,27 @@ app.post(['/api/knowledge/:id/reindex', '/knowledge/:id/reindex'], async (req, r
       return res.status(200).json({ ok: true, document: { id, status: 'pending', chunkCount: 0 } });
     }
     const [buf] = await storageBucket().file(doc.storagePath).download();
-    const text = buf.toString('utf8').slice(0, 200000);
+    // Même extraction que l'upload (texte, PDF, image VLM) — jamais de binaire brut.
+    const ext = await extractIndexableText(buf, doc.mimeType, doc.title).catch((e) => ({
+      text: '', reason: 'extraction impossible : ' + String((e && e.message) || e).slice(0, 120),
+    }));
+    const text = ext.text;
     if (text.trim().length < 20) {
-      await setDocIndexState(id, { status: 'pending', chunkCount: 0, indexReason: 'extraction non supportée (texte uniquement)' });
+      await setDocIndexState(id, { status: 'pending', chunkCount: 0, indexReason: ext.reason || 'extraction sans texte exploitable' });
       return res.status(200).json({ ok: true, document: { id, status: 'pending', chunkCount: 0 } });
     }
-    const { chunkCount, truncated } = await indexDocumentText(id, text);
-    const state = await setDocIndexState(id, {
-      status: truncated ? 'partial' : 'indexed',
-      chunkCount,
-      indexReason: truncated ? `texte tronqué à ${chunkCount} chunks (plafond anti-coût)` : '',
-    });
+    const { chunkCount, truncated, vectorsOk, vectorError } = await indexDocumentText(id, text);
+    const state = vectorsOk
+      ? await setDocIndexState(id, {
+          status: truncated ? 'partial' : 'indexed',
+          chunkCount,
+          indexReason: truncated ? `texte tronqué à ${chunkCount} chunks (plafond anti-coût)` : '',
+        })
+      : await setDocIndexState(id, {
+          status: 'pending',
+          chunkCount,
+          indexReason: `vecteurs en attente (${vectorError}) — recherche par mots-clés active`,
+        });
     return res.status(200).json({ ok: true, document: { id, ...state } });
   } catch (e) {
     const msg = String((e && e.message) || 'reindex_failed');
@@ -2847,4 +3599,4 @@ app.all(['/api/*', '/webhook/*'], (req, res) => {
 exports.whatsappWebhook = functions.https.onRequest(app);
 
 // Exportés pour tests locaux uniquement (aucun effet en prod).
-exports.__testUtils = { withTimeout, withDb, fetchUpstream, encodeOAuthState, decodeOAuthState, buildGoogleAuthUrl, GOOGLE_OAUTH_SCOPES, paramsHash, shouldEscalateClarification, computeHallucinations, chunkText, cosineSim, parseLfAsk };
+exports.__testUtils = { withTimeout, withDb, fetchUpstream, encodeOAuthState, decodeOAuthState, buildGoogleAuthUrl, GOOGLE_OAUTH_SCOPES, paramsHash, shouldEscalateClarification, computeHallucinations, chunkText, cosineSim, parseLfAsk, classifyIntentBackend, validateComptaProposalBackend, extractIndexableText, mcpDispatch, MCP_SERVER_TOOLS };

@@ -163,44 +163,9 @@ Si une écriture est proposée, réponds TOUJOURS en incluant obligatoirement un
   },
 ];
 
-export const INITIAL_KNOWLEDGE: KnowledgeDocument[] = [
-  {
-    id: 'doc-1',
-    title: 'Plan Comptable Général SYSCOHADA Révisé',
-    category: 'Normes comptables',
-    lastUpdated: '10 Août 2024',
-    size: '2.4 MB',
-    summary: 'Nomenclature officielle des comptes classes 1 à 9 pour l’espace OHADA avec règles d’évaluation et de comptabilisation.',
-    status: 'reference',
-  },
-  {
-    id: 'doc-2',
-    title: 'Guide Pratique TVA & Facturation Normalisée DGI CI',
-    category: 'Fiscalité',
-    lastUpdated: '02 Sept 2024',
-    size: '1.1 MB',
-    summary: 'Spécifications techniques du sticker fiscal, mentions obligatoires sur factures d’entreprises en Côte d’Ivoire.',
-    status: 'reference',
-  },
-  {
-    id: 'doc-3',
-    title: 'Procédure Clôture Mensuelle & Rapprochement 521',
-    category: 'Procédures internes',
-    lastUpdated: '28 Août 2024',
-    size: '640 KB',
-    summary: 'Checklist des travaux de fin de mois : lettrage des comptes clients/fournisseurs, inventaire caisse, états bancaires.',
-    status: 'reference',
-  },
-  {
-    id: 'doc-4',
-    title: 'Barème Cotisations Sociales CNPS & Impôt sur Salaires',
-    category: 'Social & Paie',
-    lastUpdated: '15 Juillet 2024',
-    size: '890 KB',
-    summary: 'Taux des cotisations régime général de retraite, prestations familiales, accidents de travail et ITS.',
-    status: 'reference',
-  },
-];
+// Base vide par défaut : FINI les documents mockés. Seuls les documents réellement
+// importés par l'utilisateur (backend Firestore + Storage) apparaissent ici.
+export const INITIAL_KNOWLEDGE: KnowledgeDocument[] = [];
 
 export const INITIAL_MODELS: LLMModel[] = [];
 

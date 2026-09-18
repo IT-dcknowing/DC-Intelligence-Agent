@@ -898,13 +898,18 @@ export const AssistantView: React.FC<AssistantViewProps> = ({
                         </div>
                       )}
 
-                      {/* Contenu — Markdown rendu (jamais de syntaxe brute) */}
-                      {msg.content.trim() && (
+                      {/* Contenu — Markdown rendu (jamais de syntaxe brute).
+                          En streaming (§1.3) : texte progressif + curseur, jamais d'attente complète. */}
+                      {(msg.content.trim() || msg.streaming) && (
                         <div className={isUser ? 'whitespace-pre-wrap' : 'dc-prose'}>
                           {isUser ? (
                             <span style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{msg.content}</span>
                           ) : (
-                            <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
+                            <>
+                              <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                {msg.content + (msg.streaming ? ' ▍' : '')}
+                              </ReactMarkdown>
+                            </>
                           )}
                         </div>
                       )}
@@ -1201,18 +1206,27 @@ export const AssistantView: React.FC<AssistantViewProps> = ({
             })
           )}
 
-          {/* Real-time LLM Generating Indicator */}
-          {isGenerating && (
-            <div className="flex gap-3 max-w-2xl mr-auto animate-in fade-in">
-              <div className="w-8 h-8 rounded-lg bg-black text-white flex items-center justify-center font-bold text-xs shrink-0 border border-zinc-800">
-                CF
-              </div>
-              <div className="p-4 rounded-2xl bg-[#F8FAFC] border border-[#E2E8F0] rounded-tl-none text-[13px] text-[#64748B] flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-black animate-ping" />
-                <span>Compta Flow réfléchit et vérifie les normes SYSCOHADA...</span>
-              </div>
-            </div>
-          )}
+          {/* Indicateur discret (§1.2) : trois points animés, SANS texte ni nom d'agent.
+              Visible tant que le stream n'a pas commencé ; dès le 1er token, il disparaît. */}
+          {isGenerating &&
+            (() => {
+              const msgs = activeSession?.messages || [];
+              const last = msgs[msgs.length - 1];
+              const waiting =
+                !last ||
+                last.sender === 'user' ||
+                (last.sender === 'agent' && last.streaming && !last.content.trim());
+              if (!waiting) return null;
+              return (
+                <div className="flex gap-3 max-w-2xl mr-auto animate-in fade-in" aria-label="Réponse en cours">
+                  <div className="px-4 py-3.5 rounded-2xl bg-[#F8FAFC] border border-[#E2E8F0] rounded-tl-none flex items-center gap-1.5">
+                    <span className="typing-dot" />
+                    <span className="typing-dot" />
+                    <span className="typing-dot" />
+                  </div>
+                </div>
+              );
+            })()}
 
           <div ref={messagesEndRef} />
           </div>

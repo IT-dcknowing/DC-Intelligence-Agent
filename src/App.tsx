@@ -65,6 +65,7 @@ import {
   fetchLiveOpenRouterModels,
   fetchBackendModels,
   generateChatResponse,
+  callBackendBrief,
   friendlyInferenceError,
 } from './services/llmService';
 import { getAccountingContext } from './services/companyContextService';
@@ -72,7 +73,6 @@ import {
   fetchAgents,
   persistAgent,
   fetchKnowledge,
-  seedKnowledge,
   uploadKnowledge,
   deleteKnowledgeDoc,
   downloadKnowledge,
@@ -91,6 +91,7 @@ import {
   mergeIntegrationOverrides,
   isFrustratedText,
   postUserSignal,
+  getBrowserUserId,
 } from './services/storeApi';
 
 export default function App() {
@@ -116,6 +117,25 @@ export default function App() {
   const dismissToast = useCallback((id: string) => {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
+
+  // Journalisation structurée des erreurs (§5.3) : timestamp, agent, tool,
+  // error_code, user_id, message_id. Aucun secret, jamais de contenu client.
+  const logInferenceError = useCallback(
+    (fields: { agent: string; tool: string; error_code: string; message_id: string }) => {
+      try {
+        console.error(
+          JSON.stringify({
+            timestamp: new Date().toISOString(),
+            user_id: getBrowserUserId(),
+            ...fields,
+          })
+        );
+      } catch {
+        // logging best-effort
+      }
+    },
+    []
+  );
 
   // Chat Sessions state — prod démarre à 0, migration : purge les sessions fictives legacy
   const [chatSessions, setChatSessions] = useState<ChatSession[]>(() => {
@@ -348,21 +368,14 @@ export default function App() {
         }
       } catch { /* repli : valeurs locales */ }
 
-      // ---- Connaissances (seed des références si vide) ----
+      // ---- Connaissances (backend = source de vérité, jamais de mocks) ----
+      // Backend vide = base vide : aucun seed, aucun document fictif.
       try {
         const remoteDocs = await fetchKnowledge();
-        if (remoteDocs && remoteDocs.length > 0) {
+        if (remoteDocs) {
           setKnowledgeDocs(remoteDocs);
-        } else if (remoteDocs) {
-          await seedKnowledge(
-            INITIAL_KNOWLEDGE.map((d) => ({
-              id: d.id, title: d.title, category: d.category,
-              size: d.size, summary: d.summary, lastUpdated: d.lastUpdated,
-            }))
-          ).catch(() => {});
-          setKnowledgeDocs(INITIAL_KNOWLEDGE);
         }
-      } catch { /* repli : valeurs locales */ }
+      } catch { /* repli : valeurs locales (vide par défaut) */ }
 
       // ---- Sessions (backend prioritaire, migration du cache sinon) ----
       try {
@@ -437,6 +450,20 @@ export default function App() {
       } catch { /* repli : valeurs locales */ }
     })();
   }, []);
+
+  // Base interne interrogeable (§7) : documents indexed/partial (vecteurs) OU
+  // pending AVEC chunks (recherche lexicale sans crédits). Dès qu'un doc est
+  // interrogeable, GENERAL_ONLY bascule en WITH_INTERNAL_PLAN dans les prompts.
+  const kbIndexed = useMemo(
+    () =>
+      knowledgeDocs.some(
+        (d) =>
+          d.status === 'indexed' ||
+          d.status === 'partial' ||
+          (d.status === 'pending' && (d.chunkCount || 0) > 0)
+      ),
+    [knowledgeDocs]
+  );
 
   // Compteurs d'échanges calculés depuis les conversations persistées (jamais codés en dur).
   const agentsWithCounts = useMemo(() => {
@@ -619,9 +646,12 @@ export default function App() {
             },
           ]
         : undefined;
+    // Promesse d'upload exposée : la phase détaillée l'attend (bornée 15 s)
+    // pour transmettre la pièce au LLM vision (§4).
+    let uploadPromise: Promise<string | undefined> = Promise.resolve(undefined);
     if (file) {
       // Persistance après upload réel : le message stocké porte le storagePath.
-      uploadChatAttachment(sessionId, file)
+      uploadPromise = uploadChatAttachment(sessionId, file)
         .then((r) => {
           patchAttachments({ storagePath: r.storagePath, uploading: false });
           appendMessageRemote(sessionId, {
@@ -631,6 +661,7 @@ export default function App() {
             agentName: 'DC Intelligence',
             attachments: remoteAttachmentsFor(r.storagePath),
           }).catch(() => {});
+          return r.storagePath as string;
         })
         .catch(() => {
           patchAttachments({ uploading: false, uploadError: true });
@@ -641,6 +672,7 @@ export default function App() {
             agentName: 'DC Intelligence',
           }).catch(() => {});
           addToast('warning', 'Pièce jointe non stockée', 'Le message est envoyé, mais le fichier reste visible uniquement sur cet appareil.');
+          return undefined;
         });
     } else {
       appendMessageRemote(sessionId, {
@@ -671,8 +703,12 @@ export default function App() {
       postUserSignal('frustration').catch(() => {});
     }
 
-    // 2. Classification & routage en arrière-plan (ne bloque plus l'affichage)
-    const multimodalRes = await classifyAndExtractMultimodalInput({ text, file });
+    // 2. Classification & routage en arrière-plan (ne bloque plus l'affichage).
+    // Bornée à 12 s : au-delà, heuristique texte seul (jamais de blocage).
+    const multimodalRes = await Promise.race([
+      classifyAndExtractMultimodalInput({ text, file }),
+      new Promise<null>((res) => setTimeout(() => res(null), 12000)),
+    ]).then((r) => r ?? undefined);
     let routingRes = routeUserRequest(text, multimodalRes);
     try {
       const accueilAgentForDecision = agents.find((a) => a.isDefaultEntry || a.isRouter) || getDefaultEntryAgent(agents);
@@ -682,7 +718,11 @@ export default function App() {
         .map((m) => `${m.sender === 'user' ? 'Client' : 'DC'}: ${String(m.content).slice(0, 200)}`)
         .join('\n');
       const accCtxForDecision = getAccountingContext();
-      const ctxSummary = `company:${accCtxForDecision.companyId || '—'} status:${accCtxForDecision.contextStatus} plan:${accCtxForDecision.planComptableStatus}`;
+      const decisionCtxStatus =
+        accCtxForDecision.contextStatus !== 'GENERAL_ONLY' || !kbIndexed
+          ? accCtxForDecision.contextStatus
+          : 'WITH_INTERNAL_PLAN';
+      const ctxSummary = `company:${accCtxForDecision.companyId || '—'} status:${decisionCtxStatus} plan:${accCtxForDecision.planComptableStatus}`;
       const delegationPrompt = buildAccueilDelegationPrompt(
         { name: accueilAgentForDecision.name, role: accueilAgentForDecision.role, instructions: accueilAgentForDecision.instructions },
         historySummary,
@@ -746,6 +786,46 @@ export default function App() {
     // 3. Contexte pour l'appel LLM — history snapshot avant le nouveau message (comme avant)
     const targetSession = chatSessions.find((s) => s.id === sessionId);
 
+    // Handoff §3 : nom de signature du spécialiste + utilitaires partagés entre
+    // le try et le catch (reprise Accueil en cas d'échec).
+    const specialistDisplay = targetAgent.associatedSoftware || targetAgent.name;
+    const stampNow = () => {
+      const d = new Date();
+      return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+    };
+    const pushAgentMessage = (msg: ChatMessage, remoteAgentName: string, activeAgent: string) => {
+      appendMessageRemote(sessionId, {
+        sender: 'agent',
+        senderName: msg.senderName,
+        content: msg.content,
+        agentName: remoteAgentName,
+      }).catch(() => {});
+      setChatSessions((prev) =>
+        prev.map((s) =>
+          s.id === sessionId
+            ? {
+                ...s,
+                lastMessage: msg.content.slice(0, 80) + (msg.content.length > 80 ? '...' : ''),
+                lastMessageTime: msg.timestamp,
+                activeAgentId: activeAgent,
+                messages: [...s.messages, msg],
+              }
+            : s
+        )
+      );
+    };
+    const dropStreamMessage = (streamId: string) => {
+      setChatSessions((prev) =>
+        prev.map((s) =>
+          s.id === sessionId
+            ? { ...s, messages: s.messages.filter((m) => !(m.id === streamId && !m.content)) }
+            : s
+        )
+      );
+    };
+    let imagePaths: string[] = [];
+    let aiMsgId = '';
+
     try {
       const history = targetSession ? targetSession.messages : [];
       // Garde-fou : jamais d'appel avec un modèle indéfini (TypeError silencieux avant).
@@ -758,22 +838,17 @@ export default function App() {
         return;
       }
 
-      // Façade unique : le client parle toujours à DC Intelligence (visibleAgent).
-      // Le spécialiste est l'exécutant interne : son expertise est injectée comme
-      // contexte, pas comme identité. Le RAG/context suit le spécialiste, pas la façade.
+      // Handoff §3 : l'Accueil a routé ; le spécialiste prend le relais et SIGNE
+      // de son nom (Compta Flow, RECO, Legal Flow). Le RAG/context suit
+      // l'exécutant, pas la façade.
       const facilitatingAgent = needsDelegation ? targetAgent : visibleAgent;
 
-      // RAG réel : on interroge sur la base du besoin métier du spécialiste,
-      // pas de la façade. Fail-soft : sans backend, réponse sans sources, jamais inventées.
+      // RAG SYSTÉMATIQUE (§7) : avant chaque réponse détaillée, la question est
+      // vectorisée et cherchée (top-2) dans la base. Fail-soft : sans backend,
+      // réponse sans sources, jamais inventées.
       let ragBlock = '';
       let ragTitles: string[] = [];
-      const needsRag =
-        facilitatingAgent &&
-        (facilitatingAgent.id === 'agent-1' ||
-          facilitatingAgent.id === 'agent-3' ||
-          facilitatingAgent.associatedSoftware === 'Compta Flow' ||
-          facilitatingAgent.associatedSoftware === 'Legal Flow');
-      if (needsRag) {
+      if (trimmed.length >= 3) {
         const hits = await searchKnowledge(text, 2).catch(() => []);
         if (hits.length > 0) {
           ragTitles = [...new Set(hits.map((h) => h.title))];
@@ -782,38 +857,114 @@ export default function App() {
             hits.map((h) => `[doc:${h.title}] ${h.chunk}`).join('\n---\n');
         }
       }
-      // P0.2 Contexte entreprise : ne mentionner le plan que si la question l'exige (comptabilité/imputation)
+      // Contexte entreprise : ne mentionner le plan que si la question l'exige
+      // (comptabilité/imputation). GENERAL_ONLY + base indexée = WITH_INTERNAL_PLAN.
       const accCtx = getAccountingContext();
+      const planState =
+        accCtx.contextStatus !== 'GENERAL_ONLY' || !kbIndexed ? accCtx.contextStatus : 'WITH_INTERNAL_PLAN';
       const isComptaQuestion = facilitatingAgent && (facilitatingAgent.id === 'agent-1' || facilitatingAgent.associatedSoftware === 'Compta Flow');
       if (isComptaQuestion) {
-        if (accCtx.contextStatus !== 'GENERAL_ONLY') {
-          ragBlock += `\n\n[Contexte entreprise: ${accCtx.contextStatus} — plan:${accCtx.planComptableStatus} tiers:${accCtx.planTiersStatus} journaux:${accCtx.journauxStatus}]`;
+        if (planState === 'WITH_INTERNAL_PLAN') {
+          ragBlock += `\n\n[Contexte entreprise: WITH_INTERNAL_PLAN — base interne indexée disponible. Utilise les sources documentaires ci-dessus ; ne dis jamais "plan non accessible" ni "contexte GENERAL_ONLY". — plan:${accCtx.planComptableStatus} tiers:${accCtx.planTiersStatus} journaux:${accCtx.journauxStatus}]`;
+        } else if (planState !== 'GENERAL_ONLY') {
+          ragBlock += `\n\n[Contexte entreprise: ${planState} — plan:${accCtx.planComptableStatus} tiers:${accCtx.planTiersStatus} journaux:${accCtx.journauxStatus}]`;
         } else {
           ragBlock += `\n\n[Contexte entreprise: GENERAL_ONLY — Votre plan comptable interne n'est pas encore chargé. Les comptes proposés peuvent nécessiter une adaptation.]`;
         }
       }
 
-      // Si délégation, on prévient le client AVANT l'appel spécialiste — et on crée
-      // un message intermédiaire "Je demande à notre agent comptable..." avec le vrai taskId.
-      // Ce message est la preuve que la tâche existe avant la réponse, pas un setTimeout.
-      if (needsDelegation) {
-        const delegationNotice: ChatMessage = {
-          id: `msg-deleg-${currentTask.taskId}`,
-          sender: 'agent',
-          senderName: 'DC Intelligence',
-          content: `Laissez-moi vérifier cela pour vous, un instant...`,
-          timestamp: timeStr,
-          taskRef: currentTask,
-        };
-        appendMessageRemote(sessionId, {
-          sender: 'agent',
-          senderName: 'DC Intelligence',
-          content: delegationNotice.content,
-          agentName: visibleAgent.name,
-        }).catch(() => {});
-        setChatSessions((prev) =>
-          prev.map((s) => (s.id === sessionId ? { ...s, messages: [...s.messages, delegationNotice] } : s))
+      // 4. Réponse BRÈVE du LLM (§2.1) : 1 à 2 phrases qui accusent réception,
+      // reformulent si besoin et annoncent l'action. UNIQUEMENT du LLM — en cas
+      // d'échec, RIEN (dots discrets), jamais de texte statique.
+      const briefSystem =
+        `Tu es DC Intelligence (Agent d'Accueil). Réponds en 1 à 2 phrases MAX, en français, ` +
+        `chaleureusement et sans jargon : accuse réception du message, reformule la demande si utile, ` +
+        `annonce l'action en cours.` +
+        (needsDelegation ? ` Annonce le routage vers « ${specialistDisplay} » (ex : « Je transmets à l'agent Comptabilité. »).` : '') +
+        (routingRes.requiresClarification && routingRes.clarificationQuestion
+          ? ` Pose cette question : « ${routingRes.clarificationQuestion} ».`
+          : '') +
+        (file ? ' Une pièce jointe est fournie et sera analysée.' : '') +
+        ` Exemples de ton : « Oui, je suis là. Comment puis-je vous aider ? » / ` +
+        `« J'ai bien reçu votre facture, je lance l'analyse et je reviens avec l'écriture. » / ` +
+        `« Je sens que quelque chose ne va pas. Dites-moi ce qui bloque, je suis là pour vous aider. » ` +
+        `Ne décris jamais d'action déjà accomplie.`;
+      let briefContent: string | null = null;
+      try {
+        briefContent = await callBackendBrief({
+          modelId: modelObj.id,
+          systemPrompt: briefSystem,
+          userPrompt: (trimmed || fileLabel).slice(0, 1000),
+        });
+      } catch {
+        briefContent = null;
+      }
+      if (briefContent) {
+        pushAgentMessage(
+          {
+            id: `msg-brief-${Date.now()}`,
+            sender: 'agent',
+            senderName: 'DC Intelligence',
+            content: briefContent,
+            timestamp: stampNow(),
+            taskRef: currentTask,
+          },
+          visibleAgent.name,
+          entryAgent.id
         );
+      }
+
+      // Sans délégation, le brief EST la réponse (pas de doublon détaillé).
+      if (!needsDelegation) {
+        if (!briefContent) throw new Error('brief_indisponible');
+        return;
+      }
+
+      // 5. Attente upload bornée (15 s) pour transmettre la pièce au LLM vision (§4).
+      // Au-delà, on compose sans l'image (mentionnée comme non lisible, §4.3).
+      if (file) {
+        try {
+          const storedPath = await Promise.race([
+            uploadPromise,
+            new Promise<undefined>((res) => setTimeout(() => res(undefined), 15000)),
+          ]);
+          if (typeof storedPath === 'string' && storedPath) imagePaths = [storedPath];
+        } catch {
+          imagePaths = [];
+        }
+      }
+      const lowVision =
+        Boolean(file) && (!multimodalRes || (multimodalRes.confidence ?? 0) < 0.6) && imagePaths.length === 0;
+
+      // 6. ANTI-HALLUCINATION (§6) : le prompt reçoit la liste des actions
+      // RÉELLEMENT effectuées. Liste vide ou sans vérification = interdiction
+      // de dire « j'ai vérifié / consulté / son retour ».
+      const actionsDone: string[] = [
+        `classification (${multimodalRes?.documentType || 'texte'}, confiance ${Math.round(((multimodalRes?.confidence ?? 0.6) * 100))} %)`,
+        `routage → ${specialistDisplay} (${routingRes.domain}, confiance ${Math.round(routingRes.confidence * 100)} %)`,
+        `tâche ${currentTask.taskId}`,
+        ragTitles.length > 0
+          ? `RAG : ${ragTitles.length} source(s) [${ragTitles.join(', ')}]`
+          : 'RAG : aucune source documentaire',
+        `contexte : ${planState}`,
+      ];
+      if (file) {
+        actionsDone.push(
+          imagePaths.length > 0
+            ? `pièce jointe stockée (${imagePaths[0]}) et transmise en vision`
+            : 'pièce jointe NON stockée (visible locale uniquement)'
+        );
+      }
+      if (lowVision) actionsDone.push('pièce NON lisible automatiquement (confiance < 60 %)');
+      let actionsBlock =
+        `\n\n[Actions réellement effectuées : ${actionsDone.join(' → ')}. ` +
+        `RÈGLE ABSOLUE : si cette liste ne contient pas une vérification, une consultation ou une source, ` +
+        `interdiction formelle de dire « j'ai vérifié », « j'ai consulté », « j'ai son retour ». ` +
+        `Dis ce qu'il te manque au lieu d'inventer.]`;
+      if (lowVision) {
+        actionsBlock +=
+          `\n[Pièce jointe illisible : demande à l'utilisateur de la renvoyer en meilleur format ou de ` +
+          `saisir les informations manuellement, sans bloquer.]`;
       }
 
       const visibleContext = {
@@ -821,19 +972,86 @@ export default function App() {
         role: visibleAgent.role,
         instructions: visibleAgent.instructions,
       };
-      const specialistContext = needsDelegation
-        ? { name: targetAgent.name, role: targetAgent.role, instructions: targetAgent.instructions }
-        : undefined;
+      const specialistContext = {
+        name: targetAgent.name,
+        role: targetAgent.role,
+        instructions: targetAgent.instructions,
+        displayName: specialistDisplay,
+      };
 
+      // 7. Réponse DÉTAILLÉE du spécialiste, en STREAMING token-par-token (§1.3).
+      // La bulle est créée vide puis remplie dès le 1er token (20 s max, §5.1).
+      aiMsgId = `msg-ai-${Date.now()}`;
+      const streamCtrl = new AbortController();
+      const appendToken = (t: string) => {
+        setChatSessions((prev) =>
+          prev.map((s) =>
+            s.id === sessionId
+              ? {
+                  ...s,
+                  messages: s.messages.map((m) =>
+                    m.id === aiMsgId ? { ...m, content: m.content + t } : m
+                  ),
+                }
+              : s
+          )
+        );
+      };
+      setChatSessions((prev) =>
+        prev.map((s) =>
+          s.id === sessionId
+            ? {
+                ...s,
+                activeAgentId: targetAgent.id,
+                messages: [
+                  ...s.messages,
+                  {
+                    id: aiMsgId,
+                    sender: 'agent',
+                    senderName: specialistDisplay,
+                    content: '',
+                    timestamp: stampNow(),
+                    streaming: true,
+                    taskRef: currentTask,
+                  } as ChatMessage,
+                ],
+              }
+            : s
+        )
+      );
+      const finalizeStream = (content: string) => {
+        setChatSessions((prev) =>
+          prev.map((s) =>
+            s.id === sessionId
+              ? {
+                  ...s,
+                  lastMessage: content.slice(0, 80) + (content.length > 80 ? '...' : ''),
+                  lastMessageTime: stampNow(),
+                  messages: s.messages.map((m) =>
+                    m.id === aiMsgId ? { ...m, content, streaming: false } : m
+                  ),
+                }
+              : s
+          )
+        );
+      };
       const aiResponseContent = await generateChatResponse({
         model: modelObj,
         conversationHistory: history,
-        userMessage: text + ragBlock,
+        userMessage: text + ragBlock + actionsBlock,
         apiKeys,
         reasoningEffort,
         agentContext: visibleContext,
         specialistContext,
+        images: imagePaths,
+        hasImages: imagePaths.length > 0,
+        stream: true,
+        onToken: appendToken,
+        signal: streamCtrl.signal,
+        firstTokenTimeoutMs: 20000,
       });
+      // Finalise la bulle (streamée token-par-token, ou posée d'un bloc en repli).
+      finalizeStream(aiResponseContent);
 
       // Try extracting structured JSON proposal from LLM output
       let proposal: PropositionEcriture | undefined;
@@ -890,55 +1108,109 @@ export default function App() {
         }
       }
 
-      const responseTime = new Date();
-      const responseTimeStr = `${String(responseTime.getHours()).padStart(2, '0')}:${String(
-        responseTime.getMinutes()
-      ).padStart(2, '0')}`;
-
-      // Retour visible toujours estampillé DC Intelligence — pas de mention d'agent interne.
+      // La bulle streamée existe déjà : on la complète (proposition, validation),
+      // pas de doublon. Signature du spécialiste (§3.2 handoff).
       const wrappedContent = aiResponseContent;
-
-      const aiMsg: ChatMessage = {
-        id: `msg-ai-${Date.now()}`,
-        sender: 'agent',
-        senderName: 'DC Intelligence',
-        content: wrappedContent,
-        timestamp: responseTimeStr,
-        proposal,
-        validationResult,
-        taskRef: currentTask,
-      };
-
+      setChatSessions((prev) =>
+        prev.map((s) =>
+          s.id === sessionId
+            ? {
+                ...s,
+                messages: s.messages.map((m) =>
+                  m.id === aiMsgId ? { ...m, proposal, validationResult } : m
+                ),
+              }
+            : s
+        )
+      );
       appendMessageRemote(sessionId, {
         sender: 'agent',
-        senderName: 'DC Intelligence',
+        senderName: specialistDisplay,
         content: wrappedContent,
-        agentName: visibleAgent.name,
+        agentName: specialistDisplay,
       }).catch(() => {});
-      setChatSessions((prev) =>
-        prev.map((s) => {
-          if (s.id === sessionId) {
-            return {
-              ...s,
-              lastMessage: wrappedContent.slice(0, 80) + '...',
-              lastMessageTime: responseTimeStr,
-              messages: [...s.messages, aiMsg],
-            };
-          }
-          return s;
-        })
-      );
     } catch (err: any) {
-      console.error('LLM Inference Error:', err);
-      // Message clair au lieu d'un silence : rate-limit, indisponibilité
-      // backend (clé cabinet), erreurs réseau/timeout.
+      // §3.3 + §5 : JAMAIS de silence ni de spinner infini. Toute erreur produit
+      // un message explicite voisé par l'agent (Accueil reprend la main si le
+      // spécialiste a échoué), + toast technique + log structuré (§5.3).
       const raw = String(err?.message || '');
-      const friendly = /backend_not_configured|AUCUNE_CLÉ_API|OPENROUTER_API_KEY/.test(raw)
-        ? 'Service IA indisponible : clé cabinet manquante côté serveur. Contactez l’administrateur.'
-        : /timeout|délai|Failed to fetch|NetworkError|unreachable/i.test(raw)
-        ? 'Le service IA met trop de temps à répondre. Réessayez dans un instant.'
-        : friendlyInferenceError(err);
-      addToast('error', 'Erreur d’inférence IA', friendly);
+      const errorCode = /backend_not_configured|AUCUNE_CLÉ_API/.test(raw)
+        ? 'backend_not_configured'
+        : /LIMITE_ATTEINTE|429/.test(raw)
+        ? 'rate_limited'
+        : /STREAM_FIRST_TOKEN_TIMEOUT|pipeline_deadline|timeout|délai/i.test(raw)
+        ? 'timeout_20s'
+        : /Failed to fetch|NetworkError|unreachable|backend_unreachable/.test(raw)
+        ? 'network_unreachable'
+        : /brief_indisponible/.test(raw)
+        ? 'brief_indisponible'
+        : /backend_502|backend_504/.test(raw)
+        ? 'upstream_502_504'
+        : 'unknown';
+      logInferenceError({
+        agent: specialistDisplay,
+        tool: 'chat',
+        error_code: errorCode,
+        message_id: userMsg.id,
+      });
+      dropStreamMessage(aiMsgId);
+      const extraCtx = imagePaths.length > 0 ? ` (pièce : ${imagePaths[0]})` : '';
+      logInferenceError({
+        agent: specialistDisplay,
+        tool: 'chat_detail',
+        error_code: `${errorCode}${extraCtx}`,
+        message_id: aiMsgId,
+      });
+      if (/STREAM_FIRST_TOKEN_TIMEOUT/.test(raw)) {
+        // §5.1 : 20 s sans réponse → message LLM, pas de spinner infini.
+        pushAgentMessage(
+          {
+            id: `msg-timeout-${Date.now()}`,
+            sender: 'agent',
+            senderName: 'DC Intelligence',
+            content: 'Le traitement prend plus de temps que prévu. Voulez-vous réessayer ou contacter un agent humain ?',
+            timestamp: stampNow(),
+            taskRef: currentTask,
+          },
+          visibleAgent.name,
+          entryAgent.id
+        );
+        addToast('error', 'Délai dépassé (20 s)', 'Le traitement prend plus de temps que prévu.');
+      } else if (/brief_indisponible/.test(raw)) {
+        pushAgentMessage(
+          {
+            id: `msg-err-${Date.now()}`,
+            sender: 'agent',
+            senderName: 'DC Intelligence',
+            content: 'Je n’arrive pas à vous répondre pour le moment. Voulez-vous réessayer ou parler à un humain ?',
+            timestamp: stampNow(),
+            taskRef: currentTask,
+          },
+          visibleAgent.name,
+          entryAgent.id
+        );
+        addToast('error', 'Erreur d’inférence IA', friendlyInferenceError(err));
+      } else {
+        // §3.3 : le spécialiste a échoué → l'Accueil reprend la main explicitement.
+        const friendly = /backend_not_configured|AUCUNE_CLÉ_API|OPENROUTER_API_KEY/.test(raw)
+          ? 'Service IA indisponible : clé cabinet manquante côté serveur. Contactez l’administrateur.'
+          : /timeout|délai|Failed to fetch|NetworkError|unreachable/i.test(raw)
+          ? 'Le service IA met trop de temps à répondre. Réessayez dans un instant.'
+          : friendlyInferenceError(err);
+        pushAgentMessage(
+          {
+            id: `msg-err-${Date.now()}`,
+            sender: 'agent',
+            senderName: 'DC Intelligence',
+            content: `Je n'ai pas pu traiter votre demande. Voulez-vous réessayer ou parler à un humain ? (${friendly})`,
+            timestamp: stampNow(),
+            taskRef: currentTask,
+          },
+          visibleAgent.name,
+          entryAgent.id
+        );
+        addToast('error', 'Erreur d’inférence IA', friendly);
+      }
     } finally {
       setIsGenerating(false);
     }
@@ -1146,15 +1418,20 @@ export default function App() {
       return;
     }
     setKnowledgeDocs((prev) => prev.map((d) => (d.id === docId ? { ...d, ...updated } : d)));
+    const searchablePending = updated.status === 'pending' && (updated.chunkCount || 0) > 0;
     addToast(
-      updated.status === 'indexed' || updated.status === 'partial' ? 'success' : 'info',
+      updated.status === 'indexed' || updated.status === 'partial' || searchablePending ? 'success' : 'info',
       updated.status === 'indexed'
         ? 'Document indexé'
         : updated.status === 'partial'
         ? 'Indexation partielle'
+        : searchablePending
+        ? 'Document interrogeable'
         : 'En attente d’indexation',
       updated.status === 'indexed'
         ? `${updated.chunkCount || 0} chunks vectoriels actifs.`
+        : searchablePending
+        ? `${updated.chunkCount} chunks en recherche par mots-clés (vecteurs en attente).`
         : updated.indexReason || 'Voir le statut du document.'
     );
   };
@@ -1169,7 +1446,18 @@ export default function App() {
     try {
       const doc = await uploadKnowledge(file, 'PROCÉDURES SYSCOHADA');
       setKnowledgeDocs((prev) => [doc, ...prev.filter((d) => d.id !== doc.id)]);
-      addToast('success', 'Document persisté', `${file.name} stocké et visible après refresh.`);
+      const searchablePending = doc.status === 'pending' && (doc.chunkCount || 0) > 0;
+      if (doc.status === 'indexed' || doc.status === 'partial' || searchablePending) {
+        addToast(
+          'success',
+          'Document utilisable par les agents',
+          searchablePending
+            ? `${file.name} : ${doc.chunkCount} chunks en recherche par mots-clés (vecteurs en attente).`
+            : `${file.name} : ${doc.chunkCount || 0} chunks indexés.`
+        );
+      } else {
+        addToast('success', 'Document persisté', `${file.name} stocké. ${doc.indexReason || 'Indexation à venir.'}`);
+      }
     } catch (err: any) {
       addToast('error', 'Échec de l’envoi', err?.message || 'Serveur injoignable.');
     } finally {

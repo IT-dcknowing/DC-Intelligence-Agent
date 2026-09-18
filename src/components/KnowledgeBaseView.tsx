@@ -358,6 +358,8 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
                         ? `${selectedDoc.chunkCount || 0} chunks indexés (texte tronqué au plafond)`
                         : selectedDoc.status === 'reference'
                         ? 'Référence sans fichier : aucune indexation possible'
+                        : (selectedDoc.chunkCount || 0) > 0
+                        ? `${selectedDoc.chunkCount} chunks interrogeables par mots-clés — utilisés par les agents${selectedDoc.indexReason ? ` (${selectedDoc.indexReason})` : ''}`
                         : selectedDoc.indexReason || 'En attente d’indexation'}
                     </p>
                   </div>
@@ -366,7 +368,7 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
                 <div className="flex items-center gap-2 text-[12px] font-semibold text-black bg-white px-3 py-1.5 rounded-full border border-[#E4E4E7] shadow-xs">
                   <span
                     className="w-2 h-2 rounded-full"
-                    style={{ background: selectedDoc.status === 'indexed' ? '#000' : '#A1A1AA' }}
+                    style={{ background: (selectedDoc.status === 'indexed' || selectedDoc.status === 'partial' || ((selectedDoc.chunkCount || 0) > 0 && selectedDoc.status === 'pending')) ? '#000' : '#A1A1AA' }}
                   />
                   <span>
                     {selectedDoc.status === 'indexed'
@@ -375,6 +377,8 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
                       ? 'Partiel'
                       : selectedDoc.status === 'reference'
                       ? 'Référence'
+                      : (selectedDoc.chunkCount || 0) > 0
+                      ? 'Mots-clés'
                       : 'Non indexé'}
                   </span>
                 </div>

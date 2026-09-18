@@ -1,0 +1,1013 @@
+================================================================================
+DC INTELLIGENCE — ETAT ACTUEL COMPLET DU SYSTEME
+Agents, outils, system prompts, skills, actions, logiques applicatives
+Date de redaction : 18/09/2026 — releve EXHAUSTIF depuis le code (src/ + functions/)
+================================================================================
+
+SOMMAIRE
+  1. Vue d'ensemble / stack
+  2. Les 4 agents (identite, role, objectif, statut, logiciels, actions, canaux)
+  3. Accueil canonique + auto-reparation (fingerprints)
+  4. Facade unique DC Intelligence (regle d'identite)
+  5. System prompts (buildAgentPrompt cas 1/2, outils Accueil, prompt de delegation)
+  6. Routage : heuristique + decision LLM
+  7. Classification multimodale (texte / fichier / audio / vision)
+  8. Outils MCP (prepare / commit, garde EXECUTE, logs)
+  9. Task Engine (cycle de vie des taches)
+ 10. Validateur comptable (7 controles + controles etendus)
+ 11. Referentiel SYSCOHADA code (accountingTools) + exports Sage/ComptaFlow
+ 12. Contexte entreprise + capacites connecteurs
+ 13. Skills et connaissances lus par les agents (RAG)
+  14. Pipeline d'envoi d'un message (brief LLM -> streaming, handoff signe)
+ 15. Sessions / conversations (CRUD, persistance, dedup, epinglage)
+ 16. Vues frontend (Sidebar, Assistant, Connexions, Connaissances, Parametres,
+      Moteur & WhatsApp, Agents, ModelSelector, InputArea)
+ 17. Pieces jointes du chat (upload, miniatures, lightbox)
+ 18. Voix (Groq Whisper) + signaux frustration
+ 19. Modeles LLM, cles API, catalogue
+ 20. Backend functions/index.js (routes, rate limits, secrets, memoires)
+ 21. WhatsApp (webhook, overview, envoi)
+ 22. Design system Noir & Blanc (codes exacts)
+ 23. Securite / persistance / erreurs conviviales
+ 24. Arborescence des fichiers cles
+
+--------------------------------------------------------------------------------
+1. VUE D'ENSEMBLE / STACK
+--------------------------------------------------------------------------------
+- Frontend : React + TypeScript + Vite 6, Tailwind, react-markdown + remark-gfm,
+  Lucide icons. Entree : src/main.tsx (StrictMode, #root, index.css).
+- Backend : 1 seule Cloud Function Express `whatsappWebhook` (us-central1,
+  Node 22, ~80 Ko) : functions/index.js (~2850 lignes). Toutes les routes
+  /api/** et /webhook y sont reecrites (firebase.json).
+- Donnees : Firestore (source de verite) + Firebase Storage (fichiers) +
+  cache localStorage (repli offline instantane). firestore.rules : deny-all
+  partout (allow read,write: if false) — le front n'ecrit JAMAIS directement,
+  tout passe par /api (Admin SDK cote serveur).
+- LLM : OpenRouter via proxy backend POST /api/chat (cle OPENROUTER_API_KEY
+  cote serveur, jamais exposee). Fallbacks : cles locales (Parametres) puis
+  appels directs Anthropic / DeepSeek / OpenRouter.
+- Modele par defaut du cabinet : inclusionai/ling-3.0-flash-vl:free
+  ("Ling 3.0 Flash VL", vision + texte, gratuit, actif sans configuration).
+- Prod : https://dcintelligenceio.web.app (hosting) + functions us-central1.
+- Principe transversal : RIEN N'EST SIMULE. Pas de succes mensonger, pas de
+  sources RAG inventees, pas d'ecriture marquee EXECUTED sans reponse reelle
+  d'un connecteur. Echec explicite + toast.
+
+--------------------------------------------------------------------------------
+2. LES 4 AGENTS (src/mockData.ts:31-164)
+--------------------------------------------------------------------------------
+Un seul orchestrateur : l'Accueil. Facade unique : le client ne parle qu'a
+"DC Intelligence". Les specialistes sont des EXECUTANTS INTERNES.
+
+A. agent-router — "Agent Accueil / Routeur Central" (mockData.ts:32-46)
+   - Description : point d'entree principal. Identifie l'utilisateur, qualifie
+     l'intention, oriente vers l'agent specialise.
+   - Role : Agent d'Accueil DC Intelligence — facade conversationnelle et
+     routeur intelligent. / Objectif : garder la relation client, comprendre
+     chaque demande AVEC MEMOIRE, deleguer a l'expert interne en creant une
+     vraie TASK tracable.
+   - Statut : actif. isRouter=true, isDefaultEntry=true (SEUL point d'entree ;
+     toute nouvelle session demarre dessus, getDefaultEntryAgent().
+     App.tsx:50-56).
+   - Logiciel associe : Orchestrateur Central.
+   - Actions autorisees : READ, RECOMMEND (pas d'execution directe).
+   - Canaux : whatsapp, web, phone.
+   - Instructions (ACCUEIL_CANONICAL, 5 regles MEMOIRE/QUALIFIER/DELEGUER/
+     RESTITUER/RASSURER) : vrai agent LLM avec memoire (historique + contexte
+     entreprise + taches) et pouvoir de delegation via outils delegate_*.
+     N'execute JAMAIS la logique metier (ni ecritures, ni calculs).
+     Verbatim : "Tu es DC Intelligence incarne par l'Agent d'Accueil, point
+     d'entree unique et interlocuteur permanent du client." / "Tu n'executes
+     JAMAIS toi-meme la logique metier (ni ecritures, ni calculs,
+     ni declarations)."
+
+B. agent-1 — "Agent Comptabilite" (mockData.ts:47-135)
+   - Description : imputation SYSCOHADA, saisie de factures, lettrage des
+     comptes tiers, controles de coherence.
+   - Role : comptable generaliste autonome (achats, ventes, tresorerie, OD).
+   - Objectif : imputation rapide et rigoureuse pour PME ivoiriennes, respect
+     du plan SYSCOHADA revise.
+   - Statut : actif. Logiciel : Compta Flow
+     (mcpEndpoint https://compta-flow.dc-knowing.com/mcp).
+   - Actions : READ, RECOMMEND, PREPARE, EXECUTE. Canaux : whatsapp, web.
+   - Instructions (long prompt structure RÔLE/OBJECTIF/10 REGLES NON
+     NEGOCIABLES/FLUX/SKILL 9 COLONNES/SORTIE JSON) : expert-comptable
+     SYSCOHADA senior CI/OHADA ; equilibre ΣD=ΣC tolerance 0 ; comptes
+     fournis uniquement ; outils obligatoires (jamais de calcul manuel) ;
+     infos manquantes demandees AVANT ecriture ; mentions legales RCCM/CC/NCC ;
+     separation Constatation (OD/ACH/VTE) vs Reglement (BQ/CSE — interdit de
+     debiter un 6xx en BQ/CSE) ; seuils 50 000 FCFA ; 6622 vs 6611 ;
+     TVA 18/9/0 (4452/4453/4451/4431) ; prorata temporis ; non-compensation ;
+     sortie JSON obligatoire + tableau Markdown.
+     Verbatim : "Tu es un expert-comptable SYSCOHADA senior, specialise
+     Cote d'Ivoire et zone OHADA." / "Toute ecriture doit respecter
+     Σ DEBITS = Σ CREDITS (tolerance 0 FCFA)."
+
+C. agent-2 — "Agent Rapprochement Bancaire" (mockData.ts:136-149)
+   - Description : pointage automatique des releves (SGBCI, Ecobank, BICICI,
+     NSIA), detection des ecarts de tresorerie.
+   - Role : auditeur de tresorerie et assistant de conciliation.
+   - Objectif : controle croise mouvements bancaires reels vs journaux 521.
+   - Statut : actif. Logiciel : RECO (https://reco.dc-knowing.com/mcp).
+   - Actions : READ, RECOMMEND, PREPARE, EXECUTE. Canaux : whatsapp, web.
+   - Instructions (4 regles) : comparer flux au journal 521, isoler
+     agios/commissions 631, etat solde theorique vs reel, alerter si ecart
+     inexplique > 100 000 FCFA.
+
+D. agent-3 — "Agent Juridique & Fiscal" (mockData.ts:150-163)
+   - Description : conformite fiscale DGI CI (TVA, BIC, retenues, DAS) et
+     declarations sociales CNPS.
+   - Role : conseiller fiscal et assistant declaratif PME.
+   - Objectif : echeances fiscales (declarations du 15 du mois), conformite CGI.
+   - Statut : actif. Logiciel : Legal Flow
+     (https://legal-flow.dc-knowing.com/mcp ; LegalFlow pre-configure ACTIF
+     par defaut, endpoint us-central1-legalflowio).
+   - Actions : READ, RECOMMEND, PREPARE, EXECUTE. Canaux : whatsapp, web, phone.
+   - Instructions (5 regles) : deductibilite TVA art. 355 CGI, acomptes BIC +
+     Patente, retenues AIRSI 5 %/10 % prestataires non immatricules, syntheses
+     e-Impots, et si sanctions/penalites : ajouter EN FIN une phrase courte
+     "Ceci est une information generale." (jamais en tete, jamais de long
+     avertissement).
+- Compteurs "echanges reels" : calcules depuis les messages persistants
+  (sender agent + taskRef.agentId resolu par nom), jamais saisis
+  (App.tsx:442-457). AgentList les affiche ; AgentDetail aussi.
+
+--------------------------------------------------------------------------------
+3. ACCUEIL CANONIQUE + AUTO-REPARATION (mockData.ts:5-29)
+--------------------------------------------------------------------------------
+- ACCUEIL_CANONICAL (role/goal/instructions) : l'Accueil ne contient JAMAIS
+  d'imputation ni de SYSCOHADA. AgentDetail affiche un encart "Protege
+  l'identite de l'Accueil" avec bouton "Reinitialiser le prompt" qui restaure
+  le canonique (role+goal+instructions) et persiste (AgentDetail.tsx:74-87).
+- SPECIALIST_PROMPT_FINGERPRINTS = ['REGLES NON NEGOCIABLES', 'Σ DEBITS',
+  'imputation comptable'] : a l'hydratation, si le prompt distant du point
+  d'entree contient une de ces signatures (ecrasement historique par un prompt
+  specialiste), le canonique est restaure + persiste automatiquement, et le
+  drapeau isDefaultEntry survit au merge meme si le backend l'ignore
+  (App.tsx:313-349).
+
+--------------------------------------------------------------------------------
+4. FACADE UNIQUE DC INTELLIGENCE (llmService.ts:278-314)
+--------------------------------------------------------------------------------
+- DC_FACADE_NAME = 'DC Intelligence', DC_FACADE_ROLE = 'Interlocuteur unique
+  — facade conversationnelle permanente'. NEUTRAL_BASE = "Tu es DC
+  Intelligence, interlocuteur unique du client. Reponds en francais, avec
+  precision et concision."
+- buildAgentPrompt(agentContext, {specialistContext}) :
+  . Cas 1 (pas de delegation) : "Tu es DC Intelligence, incarne par
+    « name » (role). instructions" + ligne de capacites de delegation (sauf si
+    le prompt contient deja delegate_to_) + "Regle d'identite : tu restes DC
+    Intelligence du premier au dernier message. Tu ne dis jamais « je suis
+    l'Agent Comptabilite/Juridique/Reco »."
+  . Cas 2 (delegation, HANDOFF §3) : "Tu reponds en tant que « SIGNATAIRE »
+    (displayName = associatedSoftware : Compta Flow / RECO / Legal Flow, sinon
+    nom de l'agent), agent specialise de DC Intelligence. Tu disposes de
+    l'expertise suivante : [instructions specialiste]. Consigne stricte : ne
+    simule JAMAIS une consultation ou une verification — si les donnees
+    fournies sont insuffisantes, dis ce qu'il te manque au lieu d'inventer.
+    Presente la reponse comme tienne (« Voici ce que j'ai trouve... »)."
+    L'ancienne clause "ne revele JAMAIS les agents internes" et la formule
+    « Laissez-moi verifier... » sont SUPPRIMEES (le brief Accueil annonce le
+    routage, le specialiste signe).
+  + ligne vision si hasImages : "Une piece jointe IMAGE est fournie avec le
+    dernier message (vision) : analyse son contenu visuel en priorite et
+    integre les donnees extraites."
+- AgentContextShape.displayName? : nom de signature du specialiste.
+- Messages : brief = senderName "DC Intelligence" (Accueil) ; reponse
+  detaillee = senderName du specialiste (Compta Flow / RECO / Legal Flow) ;
+  agentName distant identique (persiste serveur) ; activeAgentId positionne
+  a chaque transition (§3.4). Le RAG et le contexte suivent le SPECIALISTE
+  (l'executant), pas la facade.
+
+--------------------------------------------------------------------------------
+5. SYSTEM PROMPTS — OUTILS DE L'ACCUEIL (llmService.ts:316-348)
+--------------------------------------------------------------------------------
+- Les 5 outils (spec ACCUEIL_TOOLS_SPEC, reponse JSON uniquement
+  {"action","reason","clarificationQuestion"}) :
+  . delegate_to_compta(reason) : compta SYSCOHADA (factures, HT/TVA,
+    ecritures, journaux, 706/401/411)
+  . delegate_to_juridique(reason) : fiscal/juridique (CGI, article, sanction,
+    obligation, declaration, echeance, Code du Travail, Legal Flow)
+  . delegate_to_reco(reason) : rapprochement bancaire (releves, 521, ecarts,
+    pointage)
+  . ask_clarification(question) : intention trop vague ou multi-entreprise
+    ambigue (une seule question ciblee)
+  . answer_directly() : simple salutation/accueil sans expertise
+  + "tu DOIS en appeler UN par tour des que l'intention est claire" et
+  "Memoire a utiliser : historique, contexte entreprise, resultats des taches
+  precedentes".
+- buildAccueilDelegationPrompt : identite Accueil + TOOLS_SPEC + "Contexte
+  entreprise: ..." + "Historique recent: ..." (4 derniers messages
+  Client/DC tronques a 200 car., ou "(premiere demande)") + "Message client
+  a qualifier: ..." + "Decide maintenant quel OUTIL appeler."
+- parseAccueilDelegationReply : extrait {...} puis JSON.parse ; actions
+  valides = les 5 ci-dessus ; retour {action, reason (300 car.),
+  clarificationQuestion (400 car.), confidence (defaut 0.85)}, sinon null.
+
+--------------------------------------------------------------------------------
+6. ROUTAGE : HEURISTIQUE + DECISION LLM (routerAgent.ts + App.tsx:675-735)
+--------------------------------------------------------------------------------
+A. Heuristique routeUserRequest (fallback et base), texte en minuscules,
+   ORDRE STRICT (le juridique passe AVANT la compta) :
+   1. Multimodal : invoice -> COMPTABILITE/agent-1 ; tax_notice ou
+      legal_contract -> JURIDIQUE_FISCAL/agent-3 ; bank_statement ->
+      RAPPROCHEMENT/agent-2 (confiance = confiance multimodale).
+   2. Humain explicite (humain, conseiller, agent humain, vraie personne...)
+      -> HUMAIN/agent-router, confiance 0.9, requiresClarification=true,
+      question : "Tres bien, je transmets a un conseiller humain. Voulez-vous
+      qu'il vous rappelle ?"
+   3. Juridique PRIORITAIRE (cgi, code general des impots, livre de
+      procedure, article N, sanction, penalite, obligation, declaration,
+      echeance, code du travail) -> JURIDIQUE_FISCAL/agent-3, 0.93.
+   4. Sigles fiscaux (imf, ifu, rccm) -> JURIDIQUE_FISCAL/agent-3, 0.85.
+   5. Juridique general (legal flow, contentieux, conformite, fiscal, dgi,
+      impot, statuts, contrat, bail, das, cnps, patente, airsi, retenue,
+      teledeclaration, e-impots, juridique) -> agent-3, 0.9.
+   6. Rapprochement (rapprochement, releve, banque, ecobank, sgbci, bicici,
+      pointage, solde, 521, ecart) -> RAPPROCHEMENT/agent-2, 0.9.
+   7. Comptabilite STRICTE (compta, facture, ecriture, syscohada, ht, ttc,
+      601, 401, 411, achat, journal, imputation, bilan, balance, grand livre ;
+      tva/vente/ttc generiques RETIRES car trop ambigus) ->
+      COMPTABILITE/agent-1, 0.9.
+   8. TVA seule : "tva" + (vente, prestation, collectee, deductibile,
+      exoneration) SANS (ecriture, imputation, journal, 601, 401) ->
+      JURIDIQUE_FISCAL/agent-3, 0.82.
+   9. Vague (texte < 8 caracteres) -> ACCUEIL/agent-router, 0.5,
+      clarification : "Bonjour ! Je suis l'Agent Accueil DC Intelligence.
+      Souhaitez-vous traiter une facture (Comptabilite), effectuer un
+      rapprochement bancaire ou consulter la fiscalite/les statuts ?"
+  10. Defaut -> AUTRE/agent-1, 0.75.
+B. Decision LLM (prioritaire, App.tsx:677-726) : l'Accueil decide via
+   generateChatResponse sur le prompt de delegation (modele selectionne,
+   reasoning Low, historique vide car resume injecte), course contre timeout
+   8 s (delegation_timeout). Mapping : delegate_to_compta->agent-1,
+   delegate_to_juridique->agent-3, delegate_to_reco->agent-2,
+   ask_clarification/answer_directly->agent-router. Domaines : COMPTABILITE /
+   JURIDIQUE_FISCAL / RAPPROCHEMENT / HUMAIN / ACCUEIL. Echec -> heuristique.
+C. Delegation effective : needsDelegation = targetAgent.id != entryAgent.id
+   ET confiance >= 0.7 ET pas de clarification requise. Une vraie TASK est
+   creee (jamais de "Je regarde" sans taskId) : createTask({agentId: nom cible
+   ou facade, action: allowedActions[0] ou PREPARE, input, status RUNNING}).
+   Puis HANDOFF §3 : (1) brief LLM de l'Accueil (1-2 phrases, annonce le
+   routage vers le specialiste, senderName "DC Intelligence") ; l'Accueil se
+   met en pause et ne reprend plus la parole. (2) Le specialiste produit sa
+   reponse detaillee (streaming) et la SIGNE (senderName = Compta Flow / RECO /
+   Legal Flow). (3) Echec specialiste -> l'Accueil reprend explicitement :
+   "Je n'ai pas pu traiter votre demande. Voulez-vous reessayer ou parler a
+   un humain ?" + toast technique. currentAgent persiste a chaque transition
+   (activeAgentId local + agentName sur chaque message distant).
+D. Classification bornee : appel borne a 12 s, au-dela heuristique texte seul
+   (jamais de blocage). Orchestrateur partage backend : classifyIntentBackend
+   (miroir EXACT de cette matrice, memes seuils) utilise par le pipeline
+   WhatsApp + expose via POST /api/route {text, docType?, confidence?}.
+   Le front garde sa version TS (logique identique, contrainte : front
+   inchange sur ce point).
+
+--------------------------------------------------------------------------------
+7. CLASSIFICATION MULTIMODALE (multimodalClassifier.ts)
+--------------------------------------------------------------------------------
+- Voie AUDIO : enveloppe seule (transcription reelle faite par l'UI via
+  voiceService). general_query, confiance 0.8 si texte sinon 0.4.
+- Voie FICHIER : inputType par MIME/ext (image : mime image ou jpg/jpeg/png/
+  webp ; pdf : mime pdf ou .pdf ; sinon document). Si image <= 10 Mo : VLM
+  vision backend POST /api/classify-vision {imageBase64, mimeType, hint=nom}
+  -> {documentType, confidence (defaut 0.8), extractedText, entities}.
+  Sinon heuristique offline sur le NOM (confiance 0.55) : facture/fac/recu/
+  ticket/quittance -> invoice (+fournisseur/150 000/FAC-XXXX/date) ;
+  taxe/impot/dgi/avis/patente/declaration/tva -> tax_notice (CI-DGI-8849,
+  450 000) ; releve/banque/ecobank/sgbci/bicici/521 -> bank_statement ;
+  contrat/statut/bail/accord/convention/pv -> legal_contract ; defaut invoice.
+- Voie TEXTE : backend d'abord — POST /api/chat (modele Ling 3.0, temperature
+  0, prompt systeme "Classifie en UN mot : invoice | tax_notice |
+  bank_statement | legal_contract | general_query. Reponds uniquement JSON",
+  texte tronque a 2000 car.) -> documentType + confiance 0.85 (+montant
+  extrait via regex FCFA/XOF). Sinon fallback regex (confiance 0.6) :
+  facture/achat/fournisseur/ttc/tva/601/401 -> invoice ; impot/dgi/
+  declaration/patente/airsi/cgic/fiscal/statuts -> tax_notice ; releve/
+  virement/banque/rapprochement/521/ecobank/sgbci -> bank_statement ;
+  contrat/bail/litige/tribunal/jurisprudence -> legal_contract ; sinon
+  general_query.
+- Note : le pill "text - Doc - Confiance" qui affichait ce resultat dans la
+  bulle est MASQUE (AssistantView) ; la classification tourne en fond pour
+  le routage uniquement.
+- Types : InputType = text/image/pdf/document/audio ; DocumentType =
+  invoice/tax_notice/bank_statement/legal_contract/general_query/other.
+
+--------------------------------------------------------------------------------
+8. OUTILS MCP (mcpClient.ts + backend /api/mcp/call)
+--------------------------------------------------------------------------------
+- executeSoftwareTool({software: 'Legal Flow'|'Compta Flow'|'RECO', toolName,
+  arguments, permissionLevel}) -> POST /api/chat... non : POST /api/mcp/call
+  (mcpClient.ts:46). Aucune liste d'outils codee en dur cote front.
+- GARDE EXECUTE (mcpClient.ts:32-43) : permissionLevel EXECUTE exige
+  arguments.draftId + confirm:true, sinon erreur "EXECUTE refuse :
+  confirmation explicite requise (draftId + confirm:true)".
+- Retour {success, software, toolName, data?, error?, executionTimeMs,
+  degraded?} : 404 -> backend_mcp_absent (degraded) ; erreur -> detail ;
+  catch -> backend_unreachable (degraded). MCP_TOKEN et *_MCP_URL restent
+  serveur, jamais de faux SYNCHRONIZED.
+- Backend /api/mcp/call : proxy JSON-RPC (initialize + tools/call) vers
+  l'URL du logiciel, 403 execute_requires_confirmation sans draftId+confirm,
+  503 backend_not_configured sans URL, log hash SHA256 des appels.
+- Usages reels dans l'UI (AssistantView:601-686) :
+  . handleMcpPrepare : prepare_ecriture {proposition} PREPARE sur Compta Flow
+    + logMcpCall ; echec -> "Connecteur Compta Flow non configure (Voir
+    Connexions > Compta Flow MCP)" si degraded ; succes -> draftId + alertes.
+  . handleMcpCommit : commit_ecriture {draftId, confirm:true} EXECUTE +
+    logMcpCall ; succes -> committed + commitRef (reference/ecritureId/
+    draftId) + createTask EXECUTE COMPLETED.
+- Tous les appels MCP sont journalises via logMcpCall (sans secrets) en
+  localStorage dc_intelligence_mcp_log (borne 200) + miroir serveur
+  POST /audit {mcpCall} (auditLog.ts:111-131).
+
+--------------------------------------------------------------------------------
+9. TASK ENGINE (taskEngine.ts + types.ts:26-75)
+--------------------------------------------------------------------------------
+- TaskObject {taskId, agentId, userId, companyId, action, input, status,
+  result?, error?, createdAt, updatedAt}. TaskStatus : PENDING, RUNNING,
+  WAITING_USER, COMPLETED, FAILED, CANCELLED. ActionPermission : READ,
+  RECOMMEND, PREPARE, EXECUTE.
+- createTask({agentId, action, input, status?=RUNNING}) : taskId =
+  TSK-<timestamp>-<4 car.>, userId usr-default, companyId comp-ivoire-1,
+  dates ISO, prepend en tete, sauvegarde localStorage dc_intelligence_tasks.
+- updateTaskStatus(taskId, status, result?, error?) : maj + updatedAt, null si
+  introuvable.
+- Vues : Moteur & Taches Central (volet tasks de TaskMonitorView) : 4 stats
+  (Total / RUNNING / WAITING_USER / COMPLETED), filtres Toutes/En Cours/
+  Attente Validation/Terminees, table (Task ID mono, agent, action, entree,
+  statut, date, bouton Valider si WAITING_USER -> COMPLETED), etat vide
+  pedagogique (3 etapes Intent Classification / Permission & Control /
+  Execution & Export) + bouton test diagnostic qui cree une vraie tache
+  COMPLETED.
+
+--------------------------------------------------------------------------------
+10. VALIDATEUR COMPTABLE (accountingValidator.ts:19, 7 controles)
+--------------------------------------------------------------------------------
+- validateAccountingProposal(proposal) -> ValidationResult {ok,
+  checksPassed, totalChecks=7, erreurs[], alertes[], corrections[]}.
+  1. Format JSON/ecriture bien formee (tableau non vide).
+  2. Comptes SYSCOHADA existants (verifierCompteSyscohada, strict :
+     regex ^[1-8][0-9]{1,7}$, match exact sinon racine 3 puis 2 chiffres).
+  3. Equilibre D = C, TOLERANCE 0 (sommes arrondies au centime).
+  4. Coherence TVA : si HT>0 et TVA>0, ratio = TVA/HT doit etre ~18 %
+     (marge 0.02) ou ~9 %, sinon alerte TAUX ANORMAL ; sans TVA = exonere OK.
+  5. Seuil immobilisation 50 000 FCFA : ligne 6056/6058 > 50 000 -> alerte +
+     suggestion Classe 2.
+  6. Gerant majoritaire : beneficiaire gerant + compte 6611 -> CORRECTION
+     AUTOMATIQUE vers 6622 "Remuneration du gerant majoritaire" (mutation
+     directe + trace dans corrections).
+  7. Mentions legales facture : RCCM ou CC ou NCC + date + reference + tiers
+     manquants -> alerte.
+- Controles etendus (sans casser les 7) : PROFORMA BLOQUEE (ref ^P\d ou type
+  PROFORMA, erreur bloquante), MONTANT INVALIDE (HT/TTC <= 0),
+  normalisation comptes 6 chiffres PPP000 + alerte COMPTE TIERS MANQUANT
+  (collectif 401/411 sans tiersCode/tiers), JOURNAL INCONNU + incoherence
+  type (ACHAT->ACH/OD, VENTE->VEN/OD), ecritures suspectes (R1 : interdit de
+  debiter un 6xx en BQ/CSE ; R2 equilibre ; R3 comptes inconnus ;
+  R4 non-compensation debit+credit sur meme ligne).
+- ok = aucune erreur (les alertes n'empchent pas ok=true).
+
+--------------------------------------------------------------------------------
+11. REFERENTIEL SYSCOHADA CODE + EXPORTS (accountingTools.ts, ecritureFormatter.ts)
+--------------------------------------------------------------------------------
+- accountingTools.ts (368 lignes) : plan SYSCOHADA_PLAN classes 1-8
+  (401/4011/401100/4081/4091, 411/4111/411100/416/4181/4191, 421/422/431,
+  4431/4441/4449/4451-4454/4471, 521/531/571/585, 601/602/6051/6052/6056/6058/
+  612/615/624/625/632/638/641/651/6611/6612/6613/6622/681, 701/706/707/754/781,
+  812/822...) ; verifierEquilibre ; verifierCompteSyscohada ;
+  classerImmobilisation (seuil 50 000, >12 mois -> 244 sinon 6056) ;
+  calculerTVA (HT, taux 18|9|0|exonere ; comptes 4452 biens / 4453 services /
+  4451 immo / 4431 taux 0) ; verifierCompteGerant (regex gerant/associe
+  unique/directeur general + 6611 -> 6622) ; calculerAmortissement (prorata
+  temporis, cloture 2026-12-31) ; verifierMentionsFacture ;
+  normalizeAccountCode/isSyscohadaAccount/isCollectiveAccount/
+  normalizeTierCode/validateJournalType (ACH,VEN,BQ,CSE,OD,AN,IM,BGF,BOA,BGFI ;
+  banques BGFI->5211xx, BOA->5212xx)/detectProforma/formatJJMMAA/formatAmount/
+  detecterEcrituresSuspectes.
+- ecritureFormatter.ts (format Sage/ComptaFlow v2, 9 colonnes, separateur ";",
+  pas d'en-tete, CRLF, ANSI) :
+  . generateEcrituresTxt : [Date JJMMAA, N° Saisie (ECR001 auto), Journal
+    (majuscules 8 car., defaut OD), Piece (30 car.), Compte general 6 chiffres
+    (pad6), Libelle (255 car. sans ; ni retours), Debit (montant ou vide),
+    Credit (mutuellement exclusifs), Tiers (30 car. si 401/411 sinon vide)].
+  . generatePlanComptableTxt : [numero pad6, intitule, classe, nature].
+  . generateTiersTxt : [code, nom, type, collectif pad6, ncc].
+  . generateJournauxTxt : [code, libelle, type].
+  . downloadTxt (Blob UTF-8 + telechargement + revoke 5 s ; Sage strict attend
+    Windows-1252 : re-encodage Notepad si besoin).
+  . verifyEquilibre : par saisie (D==C et >0) + global.
+- Bouton UI "Telecharger les 4 fichiers Sage" (AssistantView:1102-1145) :
+  verifie l'equilibre AVANT (alert si Debit != Credit), genere ecritures.txt
+  + plan_comptable.txt (300 ms) + tiers.txt (600 ms) + journaux.txt (900 ms).
+- SKILL ECRITURE.txt (186 lignes, guide metier) : les 9 colonnes detaillees,
+  conventions pieces (F087 ventes, CHQ0133209 cheques), libelles avec tiers,
+  cas pratiques juillet 2026 (DC-KNOWING CGA / L'ARTISAN AUTOMOBILE SARL).
+  SKILL_ECRITURE.md (6 Ko) : pendant technique du skill.
+
+--------------------------------------------------------------------------------
+12. CONTEXTE ENTREPRISE + CONNECTEURS (companyContextService.ts)
+--------------------------------------------------------------------------------
+- AccountingContext {companyId?, companyName?, exercise?, currency?,
+  contextStatus, planComptableStatus/planTiersStatus/journauxStatus/
+  banquesStatus?/reglesInternesStatus? (loaded|empty), connectors[]}.
+- ContextStatus : COMPLETE (plan+tiers+journaux charges), PARTIAL (au moins
+  un), GENERAL_ONLY (aucun — REGLE : le LLM est prevenu que le plan interne
+  n'est pas charge et que les comptes proposes peuvent necessiter adaptation ;
+  le plan n'est mentionne QUE si la question l'exige), INSUFFICIENT (pose par
+  l'appelant si info critique manquante, jamais ici).
+- Source : localStorage dc_plan_comptable_entries / dc_tiers_entries /
+  dc_journal_entries filtres par companyId (dc_current_company_id).
+- getConnectorCapabilities (lecture seule) : comptaflow via integration
+  compta-flow (connected/partial/disconnected), googlesheets via google-
+  sheets, legalflow TOUJOURS connected mais execute:false.
+- Helpers P0.3 : searchPlanComptable/searchTiers/searchJournaux (top 20),
+  searchKnowledgeBase (INITIAL_KNOWLEDGE + dc_intelligence_knowledge_docs,
+  filtre entreprise/categorie, top 10).
+
+--------------------------------------------------------------------------------
+13. SKILLS ET CONNAISSANCES LUS PAR LES AGENTS (RAG)
+--------------------------------------------------------------------------------
+Comment les agents "lisent" les skills (3 couches) :
+a) PROMPTS STATIQUES : les instructions de l'Agent Comptabilite embarquent le
+   skill d'ecriture (format 9 colonnes, regles) ; l'Accueil embarque ses
+   5 outils. C'est la couche permanente.
+b) RAG DYNAMIQUE SYSTEMATIQUE (§7, couche principale) : avant chaque reponse
+   detaillee (texte >= 3 car.), searchKnowledge(texte, 2) quel que soit
+   l'agent. Resultats injectes dans le prompt : "Sources documentaires
+   indexees (cite-les avec [doc:titre] quand tu t'en sers) : [doc:titre]
+   chunk --- ...". Titres dedupes -> sourcesRag dans l'audit. Fail-soft :
+   sans backend, reponse SANS sources, jamais inventees.
+   GENERAL_ONLY + base indexee = WITH_INTERNAL_PLAN (kbIndexed = un doc
+   indexed/partial existe) : le prompt recoit "base interne indexee
+   disponible, ne dis jamais 'plan non accessible'" au lieu de l'avertissement
+   GENERAL_ONLY (qui ne sort que si plan absent ET base vide).
+c) Documents de reference du repo (lus par les HUMAINS et servant de base
+   aux prompts, pas charges tels quels au runtime) : SKILL.md (1478 lignes,
+   skill syscohada-accounting : plan complet classes 1-8, TVA par pays,
+   ecritures, cloture, referentiel PAR DEFAUT de RECO), SKILL_ECRITURE.md,
+   SKILL ECRITURE.txt, DC_INTELLIGENCE_CONTRAT_COMPTA.md,
+   DC_INTELLIGENCE_CONTRAT.md, PERSONA_SYSTEM_CONTRACT.md,
+   ORCHESTRATION_DC_KNOWING.md, MCP_INTEGRATION.md,
+   DOSSIER_TRANSMISSION_MCP.md.
+- Base documentaire runtime : Firestore knowledge_documents + sous-collection
+  chunks (vecteurs). Seed : 4 documents de reference (Plan Comptable
+  SYSCOHADA Revise / Guide TVA & Facturation DGI CI / Procedure Cloture &
+  Rapprochement 521 / Bareme CNPS, statuts "reference" = metadonnees seules,
+  NON indexees).
+- Statuts honnetes : indexed (vecteurs stockes, chunkCount), partial (texte
+  tronque au plafond anti-cout), pending (attente/echec + indexReason),
+  reference (seed sans fichier). Seuls indexed/partial sont interrogeables.
+- Pipeline d'indexation (backend, §7 : upload = indexation reelle) : upload
+  base64 <= 8 Mo -> Storage knowledge/<id>/<nom> -> extractIndexableText
+  (PARTAGE upload/reindex) : texte brut (.txt/.md/.csv/.json) ; PDF via
+  pdf-parse (texte nettoye, echec -> pending motive, ex. scan sans texte) ;
+  IMAGE via VLM visionClassifyBuffer ("Image <nom> : <extractedText>
+  <entities>", echec sans cle -> pending motive) ; autre -> pending motive.
+  Jamais de binaire brut indexe (fix du bug reindex qui vectorisait du
+  binaire). Puis chunkText (800 car., overlap 100) -> embedTexts OpenRouter
+  text-embedding-3-small (batch 32, Retry-After) -> storeDocChunks (plafond
+  60 chunks) -> indexed/partial/pending + indexReason honnete.
+- Recherche : POST /knowledge/search {query, topK<=5} -> embedding requete ->
+  cosinus sur chunks, score >= 0.3, retour {docId, title, chunk (800 car.),
+  score} tries.
+- Statut pipeline : GET /knowledge/status -> {total, indexed, partial,
+  pending, reference, other, totalChunks, lastIndexedAt, pipeline :
+  {embedModel, chunkSize, overlap, maxChunks, minScore}} (firestore ou memory).
+- Vue KnowledgeBaseView : categories monochromes (NORMES COMPTABLES /
+  FISCALITE / PROCEDURES INTERNES / SOCIAL & PAIE), recherche, reindexation
+  reelle (bouton desactive sans handler parent), upload drag&drop vers
+  Firebase Storage (persiste, visible apres refresh), suppression,
+  telechargement (binaire backend ou repli .txt du resume), badge
+  Indexe/Partiel/Reference/Non indexe, pastilles "Agents alimentes :
+  Agent Comptabilite, Agent Juridique & Fiscal".
+
+--------------------------------------------------------------------------------
+14. PIPELINE D'ENVOI D'UN MESSAGE (handleSendMessage : brief -> streaming)
+--------------------------------------------------------------------------------
+ 1. timeStr HH:MM, trimmed, fileLabel generique (jamais le nom brut).
+ 2. Dedup : meme texte + meme piece (nom) < 2 min -> toast info, pas de
+    doublon.
+ 3. Piece optimiste : blob local immediat (URL.createObjectURL) +
+    uploading:true -> la miniature s'affiche INSTANTANEMENT (message-enter).
+ 4. userMsg {id msg-<ts>, sender user, senderName Vous, content trimmed,
+    attachments?}.
+ 5. patchAttachments() : maj ciblee du message par id.
+ 6. Miniature compressee canvas 320px jpeg 0.72 (non bloquante, images).
+ 7. INSERTION OPTIMISTE : titre auto (32 car. si "Nouvelle session..."),
+    rename distant, uploadPromise exposee (uploadChatAttachment en fond ->
+    patch storagePath puis append AVEC attachments ; echec -> patch
+    uploadError + append SANS pj + toast warning ; sans fichier -> append
+    simple). setChatSessions push (lastMessage = texte ou libelle generique,
+    updatedAtMs), setIsGenerating(true).
+ 8. Frustration (non bloquante) : isFrustratedText -> postUserSignal.
+ 9. Classification bornee 12 s (au-dela : heuristique texte seul) + routage
+    heuristique (fond).
+10. Decision LLM Accueil (prompt delegation, reasoning Low, timeout 8 s) ;
+    mapping vers agent-1/agent-3/agent-2/agent-router ; echec -> heuristique.
+11. needsDelegation (confiance >= 0.7, agent != entree, pas de clarification).
+12. createTask RUNNING (agent cible ou facade, allowedActions[0] ou PREPARE).
+13. Snapshot historique (avant le nouveau message, max 8 injectes).
+14. Garde-fou modele (toast + rollback du userMsg si aucun modele).
+15. facilitatingAgent (cible si delegation sinon facade). RAG SYSTEMATIQUE
+    (texte >= 3 car.) -> ragBlock + ragTitles (fail-soft).
+16. Contexte entreprise : WITH_INTERNAL_PLAN si GENERAL_ONLY + kbIndexed
+    (sinon ancien comportement comptable).
+17. BRIEF LLM (§2.1, callBackendBrief : 1-2 phrases, temperature 0.5, 150
+    tokens max, timeout 8 s) : accuse reception, reformule, annonce le
+    routage vers le specialiste (ou pose la question de clarification, ou
+    repond directement). senderName "DC Intelligence" + taskRef + append
+    distant + activeAgentId = entree. Echec -> RIEN (dots), jamais de statique.
+    Sans delegation, le brief EST la reponse (return).
+18. Upload attendu (borne 15 s) -> imagePaths (storagePath) pour le LLM vision ;
+    au-dela : sans image + mention "non lisible" (confiance < 60 % ->
+    consigne de demander un renvoi, sans bloquer).
+19. ANTI-HALLUCINATION (§6) : actionsBlock injecte (classification, routage,
+    tache, RAG/sources, contexte, stockage PJ) + interdiction formelle de
+    dire « j'ai verifie/consulte/son retour » si la liste ne contient pas la
+    verification.
+20. DETAILLEE EN STREAMING (§1.3) : bulle vide creee (senderName = specialiste,
+    streaming:true, activeAgentId = cible), generateChatResponse(stream:true,
+    onToken, signal, images, hasImages, firstTokenTimeoutMs 20 s) ; tokens
+    appendus au fil de l'eau + curseur ; finalize a la fin (ou pose d'un bloc
+    en repli direct). Proposition JSON extraite APRES le stream complet ->
+    PropositionEcriture -> validateAccountingProposal -> logAuditInteraction
+    (question [visible=X specialist=Y task=Z], sourcesRag reelles) ; la bulle
+    existante est completee (proposal/validation, PAS de doublon) + append
+    distant (agentName = specialiste).
+21. Erreurs (§3.3 + §5, JAMAIS de silence) : log structure
+    {timestamp, agent, tool:chat/chat_detail, error_code, user_id, message_id}
+    (console, sans secrets) ; bulle vide supprimee ; message agent :
+    timeout 20 s -> "Le traitement prend plus de temps que prevu.
+    Voulez-vous reessayer ou contacter un agent humain ?" ; brief KO ->
+    "Je n'arrive pas a vous repondre..." ; autre echec delegue -> l'Accueil
+    reprend : "Je n'ai pas pu traiter votre demande. Voulez-vous reessayer
+    ou parler a un humain ? (detail)" ; sinon texte friendly. + toast error.
+22. finally setIsGenerating(false). Dots discrets tant que le stream n'a pas
+    commence (masques des le 1er token).
+
+--------------------------------------------------------------------------------
+15. SESSIONS / CONVERSATIONS (CRUD, persistance, dedup, epinglage)
+--------------------------------------------------------------------------------
+- ChatSession {id, title, lastMessage, lastMessageTime, category?, messages[],
+  modelId?, createdAt (affichage), activeAgentId?, createdAtMs?,
+  updatedAtMs?, pinned?}. ChatMessage {id, sender user/agent/system,
+  senderName, content, timestamp, proposal?, validationResult?,
+  multimodalResult?, taskRef?, attachments?[]}.
+- handleNewSession -> Promise<id> : titre "Nouvelle session N",
+  createSessionRemote (repli local session-<ts>), horodatage ms, prepend,
+  selection, retour force sur l'Accueil, toast success.
+- handleDeleteSession : interdit si <= 1 session (toast info) ; delete distant
+  (fire-and-forget), filtre, reselection remaining[0], toast info.
+- handleRenameSession : rename distant + map + toast success.
+- handleTogglePinSession : map pinned=!pinned (local ; preserve au merge
+  d'hydratation).
+- Persistance DOUBLE : Firestore (/conversations + sous-collection messages,
+  1000 msg max) + localStorage dc_intelligence_chat_sessions (cache + repli).
+  Migration auto du cache vers backend si backend vide. Au merge : jamais
+  d'ecrasement d'un message optimiste (extra locaux conserves), tri
+  id decroissant, session selectionnee conservee si presente.
+- Purge anti-mock au boot : sessions legacy (session-1, "Saisie
+  d'aujourd'hui", "Bilan 2023"...) supprimees du cache.
+- Regroupement Sidebar (getSessionTs : updatedAtMs > createdAtMs > horodatage
+  extrait de l'id session-<13 chiffres> > 0=Plus ancien) : EPINGLES (pilles en
+  tete) / AUJOURD'HUI / HIER / 7 DERNIERS JOURS / PLUS ANCIEN, tries pilles
+  d'abord puis recence. Recherche titre/message/categorie. Accordéon
+  repliable. Actif : fond #EBEBE9 + barre noire 2px. Menu "..." : Renommer
+  (inline Enter/Echap), Epingler/Desepingler, Supprimer. +Nouveau bien visible
+  (fond gris, hover noir). Selecteur <select> sur mobile (sidebar masquee).
+
+--------------------------------------------------------------------------------
+16. VUES FRONTEND
+--------------------------------------------------------------------------------
+A. Sidebar (300 px, #FAFAFA ; 60 px repliee) : brand DC INTELLIGENCE /
+   Agent Studio + collapse ; nav Agents / Moteur & WhatsApp / Connaissances /
+   Connexions (actif #F4F4F5) ; section CONVERSATIONS (voir §15) ; bas
+   Parametres + profil Alex (avatar A noir, "Profil cabinet") ; mobile :
+   bottom nav Chat/Agents/Docs/Liens/Config.
+B. AssistantView (chat pleine largeur, historique DANS la Sidebar) : header
+   16 px (logo Sparkles, titre session + pill categorie, sous-titre
+   "Conseiller SYSCOHADA, saisie d'ecritures, controle TVA & fiscalite",
+   ModelSelector, export) ; feed centre max 740 px gap 32 px ; empty state +
+   4 quickPrompts (facture achat TVA 18 % / deductibilite TVA art.355 /
+   amortissement 2,5 M 3 ans / agios 45 000) ; bulles user #171717 Inter
+   15 px 1.5 max 70 % droite / IA fond blanc Lora 16 px 1.65 (Markdown rendu,
+   jamais de syntaxe brute) + avatar DC ; meta senderName - timestamp 11 px
+   (senderName = "DC Intelligence" pour le brief Accueil, = Compta Flow / RECO /
+   Legal Flow pour la detaillee signee §3.2) ; indicateur discret : 3 dots
+   animes SANS texte ni nom d'agent (masque des le 1er token) ; bulle en
+   streaming : texte progressif + curseur (ChatMessage.streaming) ; copy hover ;
+   proposition SYSCOHADA
+   (badge Conformite 7/7 ou Alertes, checklist 7, table Debit/Credit en FCFA,
+   erreurs/validations serveur, cycle PROPOSED -> APPROVED (clic Verifier) ->
+   PREPARED (draftId + alertes serveur) -> EXECUTED (commit draftId+confirm)
+   -> VERIFIED (readback POST verify) ; bouton Escalader vers Expert = TASK
+   PREPARE WAITING_USER ; carte metier statut/contexte/confiance/sources +
+   actions Modifier/Refuser/Valider ; export Sage 4 fichiers) ; composer :
+   preview vignettes, erreur 8 Mo, enregistrement vocal (waveform + Annuler/
+   Transcrire, transcription Groq), ChatInputArea (carte flottante radius 16,
+   bord #E8E8E6, ombre douce, focus #9CA3AF ; textarea auto 52->200 px ;
+   toolbar + / micro / envoyer #171717 ; waveform 8 barres ; legende
+   "L'IA peut faire des erreurs...") ; lightbox plein ecran (fond noir 88 %,
+   nom + X, Echap).
+C. ConnectionsView (4 cartes catalogue-first, jamais vides) :
+   google-sheets (classeurs, disconnected), google-docs (documents,
+   disconnected), compta-flow (MCP SYSCOHADA, disconnected), legal-flow (MCP
+   juridique OHADA/UEMOA, CONNECTED par defaut, restaure si perdu).
+   Normalisation defensive (normalizeIntegration, whitelist ids, statuts,
+   scopes) + mergeIntegrationOverrides (le catalogue definit les cartes,
+   Firestore/cache ne surchargent que des attributs).
+   Google : popup OAuth (GET /google/auth-url?integration&origin, 520x640) ->
+   backend echange code<->tokens, refresh_token en coffre Firestore
+   users/admin/connections (jamais expose) -> postMessage -> GET /google/
+   status -> onGoogleOAuthSuccess (email reel) ; reconciliation au focus
+   (debounce 5 s) : session retrouvee / jeton invalide -> reconnecter ;
+   deconnexion = POST /google/disconnect (revocation) + bascule locale.
+   Sync : pre-controle GET status (bloque si deconnecte), 1200 ms, syncCount+1,
+   historique. Ressource cible (classeur/feuilles 9 colonnes Date / Journal /
+   N° Piece / Debit / Credit / Libelle / HT / TVA 18 % / TTC, ou document),
+   "+ Creer fichier type" (Journal General / Rapport Financier ANNEE).
+   MCP : association directe (endpoint + outils exposes = scopes), Dissocier.
+   Journal des synchronisations. Badges monochromes (Connecte gris fonce /
+   Inactif gris clair), avatars gris, logo Google monochrome.
+D. SettingsView : capsule Clés API / Modeles (N) ; Fournisseurs IA
+   (OpenRouter / Claude Anthropic / DeepSeek ; Groq masque car backend) :
+   cartes (initiales OR/CL/DS, badge Configure — cabinet si backendManaged /
+   Configure / Vide, input password + oeil, lien doc, Enregistrer/Enregistre),
+   badge "Stockage local" ; Catalogue modeles (recherche nom/ID/fournisseur,
+   table Modele/ID/Fournisseur/Statut-Actions, badge Selectionne noir,
+   Custom, Actif en session, Activer, suppression custom) ; Actualiser
+   catalogue (backend puis OpenRouter direct si cle locale) ; Ajouter un
+   modele (modal). Cles persistees localStorage (compta_flow_api_keys),
+   modeles custom aussi ; migration deepseek/deepseek-chat -> defaut.
+E. TaskMonitorView (2 volets) : WhatsApp Logs (numero API business + nom
+   verifie + qualite pulse + verification ; 6 KPI : conversations, actives
+   24 h, distribues, lus, echecs, file des morts ; liste pliable par
+   telephone : sujet, intent, N msg, horodatage ; historique user #F9FAFB /
+   agent #111827) et Moteur de Taches (voir §9). Badge "API Live Meta v26.0"
+   ou "Hors ligne — backend injoignable".
+F. Agents : AgentList (360-400 px, header + compteur, +Nouvel agent noir,
+   cartes : avatar noir si actif, badges Point d'entree noir / Par defaut
+   bord noir, statut Actif/Inactif pastille grise, bouton Config au hover,
+   description, role + compteur echanges reels noir) ; AgentDetail
+   (header avatar + badges + compteur + Activer/Desactiver, callout infos,
+   Role Operationnel / Objectif Principal / Consignes Prompt Systeme mono
+   + compteur car., encart reset Accueil canonique, Enregistrer la
+   configuration -> persistAgent + toast, "Configuration synchronisee").
+   Creation via AgentCreateModal (prompt systeme obligatoire, jamais point
+   d'entree, canaux defaut web).
+G. ModelSelector : trigger (icone, nom, Gratuit, chevron), dropdown fixed
+   z-9999 (haut/bas selon espace, 320x400), recherche, groupes par provider
+   (Pret — cabinet / Pret / Cle requise), item (nom, id mono, Trash2 custom,
+   Check), footer (Nouveau modele / Gerer cles), selecteur effort Low/Medium/
+   High. AddModelModal (exemple anthropic/claude-3.5-sonnet...), ToastContainer
+   (success/error/info/warning), ErrorBoundary (page Connexions + carte
+   d'erreur monochrome), AuditLogView (journal d'audit).
+H. Vues secondaires : ConversationList (slide-over 380 px "Echanges clients",
+   recherche, filtres Tous/En cours/Escaladees/Terminees/Fermees, statuts
+   monochromes, canaux whatsapp/web/phone) + ConversationDetail (header,
+   statuts, export audit, voice, pieces jointes) — circuit clients distinct
+   des sessions Assistant.
+
+--------------------------------------------------------------------------------
+17. PIECES JOINTES DU CHAT (ChatAttachment, chat/upload, chat/attachment)
+--------------------------------------------------------------------------------
+- Type : {name, mimeType, size, storagePath?, url?, thumbUrl?, uploading?,
+  uploadError?}. Rendu SELON LE MIME REEL (imageUtils : image/* -> image,
+  application/pdf -> pdf, sinon fichier), jamais l'extension seule.
+- Upload reel : POST /chat/upload {sessionId, name, mimeType, base64}
+  (8 Mo max, allowlist MIME : png/jpeg/webp/gif, pdf, txt/csv, doc/docx/xls/
+  xlsx, json) -> Storage chat/<session>/<att-id>/<nom> (repli memoire en dev)
+  -> {storagePath, name, mimeType, size}. Seul le storagePath est persiste
+  dans le message (sanitizeChatMessage, max 5, filtre chat/... sans "..").
+- Lecture : GET /chat/attachment?path= (rejet "..") -> base64 (repli memoire
+  + mimeType/name) ; cache Map cote front ; dataURL construite localement
+  (jamais d'URL signee).
+- Affichage : image -> <img> max 300x220 px, coins arrondis, curseur zoom,
+  clic = lightbox ; placeholder 220x140 + spinner + flou pendant l'upload ;
+  badge "Envoi..." ; nom en legende 11 px discret ; si uploadError :
+  "visible uniquement sur cet appareil". Replis : blob mort (reload) ->
+  fetch distant -> miniature -> carte d'erreur. PDF -> carte cliquable
+  (icone + nom + taille, ouvre nouvel onglet). Autre -> carte generique.
+  Contenu texte vide possible (image seule) : le texte ne s'affiche que si
+  non vide. AUCUN "[nom]" brut nulle part (verifie par grep).
+- Composer : ComposerFileThumb (miniature 48 px reelle pour images, icone
+  sinon, nom + taille, X, revoke URL), limite 5 x 8 Mo, drag&drop overlay
+  "Deposez vos fichiers", accept image/*,pdf,txt,csv,doc,docx,xls,xlsx.
+- Classification : le File d'origine est passe au classifieur (vision VLM
+  backend pour images <= 10 Mo, POST /classify-vision).
+- TRANSMISSION VISION AU LLM (§4) : upload attendu (borne 15 s) -> imagePaths
+  (storagePath) passes a generateChatResponse -> POST /api/chat les resolve
+  cote serveur (bucket ou repli memoire, max 2, 8 Mo) et les injecte en
+  image_url data-URL dans le DERNIER message user, UNIQUEMENT si le modele est
+  vision-capable (regex vl|vision|gpt-4o|claude|gemini|sonnet|opus..., sinon
+  ignore + warn). Logs : nombre + octets, jamais le base64. Ligne systeme
+  hasImages ajoutee ("analyse son contenu visuel en priorite"). Voies
+  directes (sans backend) : images ignorees. Confiance < 60 % sans vision ->
+  consigne de demander un renvoi ou une saisie manuelle, sans bloquer.
+
+--------------------------------------------------------------------------------
+18. VOIX + SIGNAUX FRUSTRATION
+--------------------------------------------------------------------------------
+- Voix : startVoiceRecording (micro + Analyser fftSize 64 + MediaRecorder +
+  SpeechRecognition FR en aperçu live italique) -> stop -> transcription :
+  VOIE 0 backend POST /transcribe {audioBase64, mimeType} (Whisper serveur,
+  cle .env, 8 Mo) PUIS fallback direct Groq (FormData, whisper-large-v3-
+  turbo, temperature 0, verbose_json, fr, POST api.groq.com/openai/v1/audio/
+  transcriptions). Echec silencieux (texte vide) sauf erreur backend
+  affichee (groqError). Timer secondes, Annuler (vide) / Transcrire.
+- Frustration cross-canal : isFrustratedText (insultes, lassitude, panne,
+  fraude, mepris) -> postUserSignal('frustration') best-effort (POST
+  /user-signals/event {userId navigateur persistant dc_user_id (randomUUID),
+  kind}) ; compteur vit cote backend (cle = user_id).
+
+--------------------------------------------------------------------------------
+19. MODELES LLM, CLES API, CATALOGUE
+--------------------------------------------------------------------------------
+- Defaut : Ling 3.0 Flash VL (openrouter, gratuit, vision+texte).
+- Catalogue : REAL_DEFAULT_MODELS + custom localStorage + backend
+  GET /models (cle cabinet) ; backendManaged => OpenRouter "Configure —
+  cabinet" sans cle locale ; defaut toujours en tete et reselectionne sauf
+  stored valide.
+- generateChatResponse : /api/chat PUIS cles locales (Ordre : Anthropic
+  direct si provider anthropic sans cle OR ; DeepSeek direct idem ; sinon
+  OpenRouter direct ; sinon erreur AUCUNE_CLE_API). Params etendus : images[]
+  (storagePath), hasImages, stream, onToken, signal, firstTokenTimeoutMs.
+- callBackendBrief : reponse breve 1-2 phrases (temperature 0.5, 150 tokens
+  max, timeout 8 s, AbortController) ; echec -> RIEN (jamais de statique).
+- Appels : temperature 0.3, max_tokens 3500 (parametre corps, borne 50..8000 ;
+  brief 150), historique 8 derniers (6 en direct Anthropic/DeepSeek, slice 12
+  backend). Classification : temperature 0. Raisonneurs (r1/reasoner/thinking) :
+  reasoning.effort (Low/Medium/High, defaut Medium, selecteur UI).
+- STREAMING (§1.3) : POST /api/chat {stream:true} -> OpenRouter stream:true ->
+  SSE relaye (lignes data {content} / [DONE] / {error}, headers no-cache +
+  no-buffering, annulation si client parti). Front : lecteur ReadableStream,
+  deltas appendus des le 1er token ; 1er token > 20 s -> STREAM_FIRST_TOKEN_
+  TIMEOUT (§5.1) ; coupure apres 1er token -> partiel rendu ; JSON non-SSE ->
+  repli bloc unique. Voies directes : non-streamees.
+- Erreurs : 429 -> attente retry_after (plafond 20 s) + 1 rejeu sinon
+  LIMITE_ATTEINTE (message quota ~1 min / changer de modele) ; 502/504 ->
+  1 rejeu a 1,5 s ; 404 backend absent (dev sans emulateur) ;
+  backend_unreachable ; reponses vides -> erreur. TOUTE erreur web finit en
+  MESSAGE agent explicite (§3.3/§5) + toast + log structure
+  {timestamp, agent, tool, error_code, user_id, message_id} (console, sans
+  secrets) : timeout 20 s -> "Le traitement prend plus de temps que prevu..." ;
+  echec delegue -> l'Accueil reprend ("Je n'ai pas pu traiter... + detail").
+- ModelSelector : ajout (AddModelModal), suppression custom (retour
+  deepseek/deepseek-chat si actif), statuts (Selectionne / Actif en session /
+  Disponible / Custom / Gratuit).
+
+--------------------------------------------------------------------------------
+20. BACKEND functions/index.js (table des routes)
+--------------------------------------------------------------------------------
+Socle : memoryStore (audit, tasks, agents, knowledge, conversations,
+integrations, wa_*, user_signals, tool_calls, accounting_proposals,
+knowledgeChunks, chat_uploads) ; Firestore si Admin SDK sinon memory ;
+CORS allowlist (+ localhost:3000, dcintelligenceio.web.app) ; express.json
+12 Mo + rawBody HMAC Meta ; dedup wamid TTL 48 h ; checkRateLimit (fenetre
+60 s, 429 + retry_after_seconds:60) ; verifyMetaSignature (HMAC sha256
+timingSafe) ; OPENROUTER_API_KEY serveur ; openRouterChat (slice 12 msgs,
+reasoning si r1/reasoner) ; mcpTargetFor (LEGAL/COMPTA/RECO_MCP_URL) ;
+mcpCallTool JSON-RPC + logToolCall hash SHA256 ; transcribeAudioBuffer
+(8 Mo, whisper-large-v3-turbo) ; visionClassifyBuffer (10 Mo, modele
+inclusionai/ling-3.0-flash-vl:free, JSON documentType/confidence/...) ;
+sanitizeAgent (whitelist actions/canaux) ; sanitizeIntegration (supprime
+*token*secret*key*) ; GOOGLE_OAUTH (scopes spreadsheets+drive.file+
+userinfo.email, ADMIN_UID, STATE_TTL 10 min, coffre users/admin/
+connections, postMessage) ; RAG (chunks 800/100, plafond 60, embeddings
+text-embedding-3-small batch 32, score >= 0.3).
+ROUTES (methode, path, role, rate-limit/min) :
+. GET /health : sante (service, version 0.3.0, store, cles presentes).
+. GET /webhook /api/webhook /v1/whatsapp/webhook : verification Meta
+  (hub.mode/token/challenge). GET / : racine tolaree. POST /webhook /api/
+  webhook /v1/whatsapp/webhook / : ingest Meta (HMAC + dedup wamid).
+. GET /models : catalogue OpenRouter (300 max, backendManaged, provider,
+  isFree). [30]
+. GET /google/auth-url : URL consentement OAuth (integration sheets/docs,
+  access offline + prompt consent, state signe). [10]
+. GET /oauth/callback : echange code->tokens (refresh_token EXIGE), coffre
+  Firestore, postMessage + redirect. [10]
+. GET /google/status : statut public {connected,email,scopes,connectedAt},
+  sans secrets. [30]
+. POST /google/disconnect : revocation Google + suppression coffre. [10]
+. POST /chat : proxy LLM (model <=120, messages 1..20, max_tokens 50..8000
+  defaut 3500, imagePaths? (chat/... x2 max, 8 Mo, vision), stream?) ; 503
+  backend_not_configured sans cle ; 429 openrouter_429 (quota). Vision :
+  resolveChatImages (bucket ou repli memoire, magic bytes PNG/JPEG/WEBP/GIF,
+  gate regex vl|vision|gpt-4o|claude|gemini|sonnet|opus sinon ignore + warn,
+  logs nombre+octets) injectees en image_url dans le DERNIER message user.
+  Stream : voir §19. [30]
+. POST /route : classification unifiee {text, docType?, confidence?} ->
+  {domain, agent, confidence} (miroir routerAgent, seuils identiques). [30]
+. POST /mcp : SERVEUR MCP ENTRANT (Legal Flow nous appelle), JSON-RPC 2.0
+  initialize/tools/list/tools/call/ping, auth Bearer MCP_TOKEN (timing-safe,
+  fail closed 503 si non configure). Outil lf_get_user_full_profile
+  {user_id?} : profil niveau 1 role entreprise — rempli depuis nos collections
+  reelles (wa_conversations x15, wa_events x5, user_signals) ; profiles,
+  entreprises, notifications, veille = null/[] avec motif dans `couverture`
+  (jamais inventes) ; user_id manquant = erreur (pas de session par defaut,
+  token partage). [20]
+. POST /mcp/call : proxy MCP SORTANT {software,toolName,arguments,permissionLevel} ;
+  403 execute_requires_confirmation sans draftId+confirm ; 503 sans URL. [30]
+. POST /transcribe : Whisper serveur {audioBase64 <=11M} -> {text,duration}.
+  [20]
+. POST /classify-vision : VLM serveur {imageBase64 <=14M} -> {documentType,
+  confidence, extractedText, entities}. [20]
+. POST /audit : persist audit (question ou ecriture requise) ou mcpCall ->
+  dc_audit source mcp. [60] / GET /audit : liste (admin).
+. GET /connectors/capabilities : capacites reelles (jamais simulees). [20]
+. POST /accounting/proposals : creation (>=2 lignes, comptes ^[1-8][0-9]{5}$,
+  ΣD=ΣC≠0, proforma ^P\d/PROFORMA bloquee) -> PROPOSED. [20]
+. GET /accounting/proposals/:id : lecture. [20]
+. POST .../approve -> APPROVED / .../prepare -> PREPARED + draftId DRAFT-<ts> /
+  .../execute (exige draftId+confirm) -> EXECUTED + externalReference /
+  .../verify -> VERIFIED. [20]
+. POST /exports/sage : verifie equilibre de chaque proposition -> 4 fichiers
+  (ecritures, plan_comptable, tiers, journaux) + EXPORT_GENERATED. [20]
+. POST /tasks : creation {agentId,action,input} -> RUNNING. [30] /
+  GET /tasks : liste (admin).
+. GET /whatsapp/overview : dashboard (store + infos numero via MCP LegalFlow,
+  repli +225 74 52 90 52 / Dc Knowing ; stats conversations/actives/lus/
+  echecs/deadLetters ; qualite hallucinations ; ?active24h=1). [30]
+. POST /user-signals/event : {userId<=80, kind frustration|clarification|
+  reset} -> compteurs. [30] / GET /user-signals/:userId : lecture. [30]
+. GET /quality/hallucinations : KPI affirmations vs tool_calls OK. [30]
+. POST /whatsapp/send : envoi manuel {to 8-15 chiffres, text} (admin). [10]
+. GET /agents : liste. [60] / PUT /agents/:id : upsert sanitise. [20] /
+  DELETE /agents/:id : suppression. [10]
+. GET /knowledge : liste (100). [60] / POST /knowledge/seed : seed
+  metadonnees seules (20 max, status reference). [10] /
+  POST /knowledge/upload : base64<=11M (fichier <=8M) -> Storage
+  knowledge/<id>/<nom> (+repli memoire), extractIndexableText (texte / PDF
+  pdf-parse / image VLM) -> indexed/partial/pending + motif. [10] /
+  GET /knowledge/status : {total, indexed, partial, pending, reference, other,
+  totalChunks, lastIndexedAt, pipeline} (firestore ou memory). [20] /
+  POST /knowledge/search : RAG topK<=5. [20] /
+  POST /knowledge/:id/reindex : meme extraction que l'upload (fix binaire). [10] /
+  GET /knowledge/:id/download : base64 borne 8M (pas d'URL signee). [20] /
+  DELETE /knowledge/:id : doc + Storage + chunks. [10]
+. POST /chat/upload : piece jointe (voir §17). [10] /
+  GET /chat/attachment : lecture piece jointe. [30]
+. GET /conversations : sessions (limit 50). [60] / POST /conversations :
+  creation (title<=120, category<=40). [20] /
+  GET /conversations/:id/messages : msgs (limit 500, tri createdAt asc). [60] /
+  POST /conversations/:id/messages : append sanitise (sender whitelist,
+  content<=8000, attachments storagePath chat/... seuls, 1000 msg max, MAJ
+  lastMessage 80 car.). [60] / PUT /conversations/:id : rename. [20] /
+  DELETE /conversations/:id : suppression session+messages. [10]
+. GET /integrations : statuts. [60] / PUT /integrations/:id : upsert sans
+  secrets. [20] / DELETE /integrations/:id : suppression. [10]
+. ALL /api/* et /webhook/* : 404 {not_found, path}.
+
+--------------------------------------------------------------------------------
+21. WHATSAPP
+--------------------------------------------------------------------------------
+- Webhook : verification GET (challenge) + ingest POST (signature HMAC,
+  dedup wamid 48 h, deadline pipeline 18 s) -> pipeline handleInboundMessage :
+  signaux prioritaires (sensible -> humain, frustration compteur cross-canal,
+  presence/accueil, acronyme ambigu, correction) -> classification (LLM, VLM
+  image, Whisper audio, repli heuristique) -> ROUTAGE UNIFIE
+  classifyIntentBackend (meme matrice/seuils que le web) -> humain direct si
+  demande -> clarification si confiance < 0.75 (compteur, escalade si boucle)
+  -> identification entreprise via Legal Flow get_user_context (multi-
+  entreprises -> choix) -> outils : Legal (compliance + overdue + lf_search
+  si besoin + lf_ask 60 s, reponse telle quelle) + Compta (get_company_context
+  si URL reelle) + RECO (get_reconciliation_status si URL reelle) — gardes
+  mcpTargetIsReal : AUCUN appel sans URL reelle (jamais de simulation) ->
+  composition (Ling 3.0 + fallback nex, 22 s, instruction JSON compta si
+  route compta) -> VALIDATION 7-checks backend de tout JSON propose
+  (erreurs bloquantes -> message dedie au client) -> envoi decoupé (8 msg
+  max, pause 450 ms, stop si fenetre 24 h) -> audit dc_audit source whatsapp
+  (validation + proposalValidation). Etats conserves (RECEIVED...COMPLETED/
+  ESCALATED/FAILED), presence read/typing reelle (typing si > 2 s, refresh
+  25 s), textes de presence conserves (evenementiels : looking au demarrage
+  classif, routing si VRAI outil derriere, verifying/resultReady si outil a
+  repondu — jamais de fausse activite).
+- Helpers whatsapp.js (328 lignes) : STATES, PERSONA_SYSTEM (Accueil verrouille
+  + anti-hallucination par actions reelles + empathie + messages courts),
+  PRESENCE (looking/lookingDoc/verifying/routingLegal-Compta-Reco/resultReady/
+  oneMoreCheck), routeText (miroir leger, garde pour compat), FRUSTRATION_RX,
+  SENSITIVE_RX, isPresenceCheck/isAccueilInsistence/isGreetingOnly,
+  splitResult (900 car., 8 max), client Graph (read/typing/text/chunks/media).
+- Overview : GET /whatsapp/overview alimente le volet WhatsApp Logs
+  (numero, nom verifie, qualite, verification, 6 KPI, conversations pliables
+  avec historique user/agent).
+- Envoi manuel : POST /whatsapp/send (admin, numero 8-15 chiffres).
+- Logs : wa_conversations (stage, currentAgent, topic, intent, compteurs),
+  wa_events, tool_calls (hash SHA256 params, sans donnees), user_signals
+  (cle = numero) — deny-all, backend uniquement.
+- Regle metier : toute nouvelle session (web OU WhatsApp) demarre sur
+  l'Agent d'Accueil (currentAgent=accueil, routeToAgent a chaque transition).
+- Prod 18/09 : /health {hasVerifyToken, hasAppSecret, hasWaSend, hasOpenRouterKey,
+  hasGroqKey, hasVlmModel, hasMcpTargets} TOUS true, store firestore.
+- Non fait (P3) : chaînage cross-canal phone <-> userId web (releve P1
+  PERSONA_SYSTEM_CONTRACT, pas d'auth web actuelle).
+
+--------------------------------------------------------------------------------
+22. DESIGN SYSTEM NOIR & BLANC (src/index.css, codes exacts)
+--------------------------------------------------------------------------------
+- Variables --dc-* : bg-main #FFFFFF ; bg-sidebar #FAFAFA ; bg-ai #FFFFFF ;
+  bg-user #171717 (charbon, JAMAIS #000 pur) ; text-user #FFFFFF ;
+  text-primary #1F1F1E ; text-secondary #6B6B6B ; text-muted #9CA3AF ;
+  border #E8E8E6 (1 px subtil) ; hover #F0F0EE ; active #EBEBE9 ;
+  code-bg #F4F4F5. Legacy : black #171717, zinc-900 #1F1F1E, zinc-700
+  #3F3F46, zinc-500 #6B6B6B, zinc-400 #A1A1AA, zinc-300 #D4D4D8, zinc-200
+  #E8E8E6, zinc-100 #F0F0EE, zinc-50 #FAFAFA.
+- Typo : UI Inter (body 14 px) ; contenu IA Lora/Georgia 16 px 1.65
+  (.dc-prose : H1 24/600, H2 20/600, H3 18/600, strong 600, em italique
+  #4A4A4A, hr, listes pl 24 px, blockquote, code JetBrains Mono, pre fond
+  #171717) ; code JetBrains Mono.
+- Layout : sidebar 300 px #FAFAFA (hover #F0F0EE, actif #EBEBE9, barre noire
+  2 px pour la conversation active) ; chat max 740 px centre, gap 32 px ;
+  bulle user #171717 max 70 % droite ; input flottant radius 16, bord
+  #E8E8E6, ombre 0 2px 15px rgba(0,0,0,0.04), focus #9CA3AF + ombre 0 4px
+  20px ; boutons primaires #171717/#fff hover #2A2A2A (ou #18181B) ;
+  secondaires blanc + bord gris ; badges monochromes fond #F3F4F6/#F4F4F5
+  texte #1F2937/#52525B bord #E5E7EB, pastilles #111827 (actif) / #D1D5DB
+  (inactif) ; AUCUNE couleur vive (ni emerald/amber/blue/red, ni vert
+  WhatsApp #25D366, ni jaune #FFFBEB, ni logo Google couleur — monochrome
+  #111827).
+- Animations : message-enter fadeInUp 0.4 s ; waveform 8 barres (3 px
+  #171717, durées 400-474 ms) ; typing 3 dots bounce #9CA3AF ;
+  is-transcribing italique gris ; focus-visible 2 px #171717 ; transitions
+  0.15 s, scale 0.98 au clic ; scrollbar fine #E8E8E6.
+- Titres : #111827/#09090B ; secondaires #6B7280/#64748B ; labels #A1A1AA.
+  Fonds cartes : blanc + bord #E5E7EB (ou ombre douce).
+
+--------------------------------------------------------------------------------
+23. SECURITE / PERSISTANCE / ERREURS CONVIVIALES
+--------------------------------------------------------------------------------
+- Firestore deny-all (17+ collections : dc_audit, dc_tasks, agents_config,
+  knowledge_documents+chunks, conversations+messages, integrations,
+  users/{uid}/connections [coffre OAuth, Admin SDK uniquement],
+  wa_conversations, wa_events, user_signals, tool_calls,
+  accounting_proposals, executions, accounting_contexts,
+  connector_capabilities, catch-all). Ecritures via /api uniquement ;
+  lectures audit/tasks via /api (x-admin-token) ; jamais d'embeddings ni de
+  secrets cote navigateur (sanitizeIntegration supprime *token*secret*key* ;
+  tokens OAuth chiffres backend uniquement).
+- Cles front : localStorage (compta_flow_api_keys, compta_flow_custom_models,
+  dc_intelligence_selected_model, dc_intelligence_chat_sessions,
+  dc_intelligence_integrations, dc_intelligence_tasks, dc_intelligence_
+  audit_log/_mcp_log, dc_user_id, dc_current_company_id,
+  dc_plan_comptable/tiers/journal_entries, dc_intelligence_knowledge_docs) ;
+  fallbacks VITE_* (dev uniquement) ; voie recommandee = backend cabinet.
+- Toasts : success/error/info/warning (session creee/renommee/supprimee,
+  agent maj, modele ajoute/retire, sync, OAuth, upload, inference...).
+- Erreurs conviviales : quota 429 (attendre ~1 min / changer de modele),
+  indisponibilite 502/504 (reessai auto), cle cabinet manquante
+  (contacter l'administrateur), reseau/timeout (reessayer), catalogue vide,
+  reindex/upload impossibles (serveur injoignable), piece non stockee
+  (visible sur cet appareil uniquement), doublon < 2 min (pas de doublon).
+- Garde-fous : jamais d'appel LLM sans modele (rollback optimiste) ; jamais
+  de prepare sans APPROVED (bouton Verifier d'abord, hint PROPOSED ->
+  APPROVED -> PREPARED) ; EXECUTE exige draftId+confirm (front ET backend) ;
+  dedup < 2 min ; historique 8 messages ; timeouts (delegation 8 s, API
+  15 s, OAuth 10 s) ; sessions 1000 msg max ; fichiers 8 Mo / 5 max ;
+  base64 11 Mo ; JSON 12 Mo.
+
+--------------------------------------------------------------------------------
+24. ARBORESCENCE DES FICHIERS CLES
+--------------------------------------------------------------------------------
+- src/main.tsx (entree) / src/App.tsx (~1320 lignes, orchestrateur front) /
+  src/types.ts (tous les types) / src/index.css (design system) /
+  src/firebase.ts (config + Firestore lecture seule) / src/mockData.ts
+  (agents, cles, integrations, connaissances, ACCUEIL_CANONICAL,
+  SPECIALIST_PROMPT_FINGERPRINTS).
+- src/services/ : llmService.ts (prompts + appels LLM) / routerAgent.ts
+  (matrice heuristique) / multimodalClassifier.ts (texte/fichier/audio/
+  vision) / mcpClient.ts (proxy MCP) / taskEngine.ts (taches) /
+  accountingValidator.ts (7 controles) / accountingTools.ts (referentiel) /
+  ecritureFormatter.ts (exports Sage) / companyContextService.ts (contexte) /
+  auditLog.ts (journaux) / voiceService.ts (Whisper) / imageUtils.ts
+  (miniatures + MIME) / storeApi.ts (483 lignes, TOUT le dialogue backend).
+- src/components/ : Sidebar.tsx (698 lignes, nav + conversations) /
+  AssistantView.tsx (1536 lignes, chat + propositions + composer) /
+  ConnectionsView.tsx (817 lignes, OAuth + MCP) / KnowledgeBaseView.tsx
+  (455 lignes, RAG) / SettingsView.tsx (553 lignes, cles + modeles) /
+  TaskMonitorView.tsx (568 lignes, WhatsApp + taches) / AgentList.tsx
+  (268 lignes) / AgentDetail.tsx (357 lignes) / ModelSelector.tsx
+  (459 lignes) / ConversationList.tsx + ConversationDetail.tsx (circuit
+  clients) / ToastContainer.tsx / ErrorBoundary.tsx / AuditLogView.tsx /
+  AgentCreateModal.tsx / AddModelModal.tsx / WaveformVisualizer.tsx /
+  chat/ (InputArea, Message, ChatContainer, ChatView, Sidebar,
+  TypingIndicator, README — dossier interne, prototype non deploye).
+- functions/ : index.js (~2700 lignes, TOUT le backend : express + ~50
+  routes) / whatsapp.js (pipeline WA) / package.json (firebase-functions
+  a mettre a jour : warning deploy non bloquant) / .env (OPENROUTER_API_KEY,
+  GOOGLE_OAUTH_CLIENT_ID/SECRET, KNOWLEDGE_BUCKET, WHISPER_MODEL...).
+- Racine : firebase.json (hosting dist + rewrites /webhook /v1/whatsapp/
+  webhook /api/** -> whatsappWebhook) / firestore.rules (deny-all) /
+  package.json (react-markdown, remark-gfm...) / SKILL.md (skill SYSCOHADA
+  1478 lignes) / SKILL_ECRITURE.md / SKILL ECRITURE.txt (guide 9 colonnes) /
+  PLAN AMELIORATION AGENT COMPTA.txt (plan agent compta) /
+  PLAN AMELIORATION GENERAL.txt (plan solidification) /
+  DC_INTELLIGENCE_CONTRAT*.md / PERSONA_SYSTEM_CONTRACT.md /
+  ORCHESTRATION_DC_KNOWING.md / MCP_INTEGRATION.md /
+  DOSSIER_TRANSMISSION_MCP.md / RECETTE_E2E.md /
+  AUDIT_REPORT_DC_INTELLIGENCE_2026-09-17.md / ETAT_ACTUEL.txt (ce fichier).
+
+================================================================================
+FIN — ETAT ACTUEL AU 18/09/2026. Toute evolution du code doit mettre a jour
+ce fichier (agents, outils, prompts, skills, actions, logiques).
+================================================================================
+

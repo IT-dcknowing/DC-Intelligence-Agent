@@ -209,12 +209,24 @@ export interface GenerateChatParams {
     role: string;
     instructions: string;
   };
-  // Expert interne : son savoir est injecté comme SOURCE, pas comme identité visible.
+  // Spécialiste délégué : il prend le relais et signe de son nom (§3 handoff).
   specialistContext?: {
     name: string;
     role: string;
     instructions: string;
+    displayName?: string;
   };
+  // Pièces jointes déjà stockées (storagePath chat/...) : le backend les injecte
+  // en vision au dernier message user. Ignorées sur les voies directes.
+  images?: string[];
+  // Ligne d'instruction vision ajoutée au system prompt (§4.2).
+  hasImages?: boolean;
+  // Streaming token-par-token (§1.3) : onToken reçoit chaque delta.
+  stream?: boolean;
+  onToken?: (token: string) => void;
+  signal?: AbortSignal;
+  // Délai max d'attente du PREMIER token en streaming (défaut 20 s, §5.1).
+  firstTokenTimeoutMs?: number;
 }
 
 export async function generateChatResponse(params: GenerateChatParams): Promise<string> {
@@ -223,8 +235,16 @@ export async function generateChatResponse(params: GenerateChatParams): Promise<
   // 0. Voie recommandée : proxy backend /api/chat (clé OPENROUTER côté serveur, jamais exposée).
   // Le backend lit ton .env racine (OPENROUTER_API_KEY). Si dispo, on l'utilise en priorité.
   const specialistContext = params.specialistContext;
+  const hasImages = Boolean(params.images && params.images.length > 0);
   try {
-    const proxied = await callBackendChat(model.id, conversationHistory, userMessage, reasoningEffort, agentContext, specialistContext);
+    const proxied = await callBackendChat(model.id, conversationHistory, userMessage, reasoningEffort, agentContext, specialistContext, 0, {
+      stream: params.stream,
+      onToken: params.onToken,
+      signal: params.signal,
+      images: params.images,
+      hasImages,
+      firstTokenTimeoutMs: params.firstTokenTimeoutMs,
+    });
     if (proxied) return proxied;
   } catch (e: any) {
     // backend_not_configured / 404 en dev local -> fallback direct ci-dessous.
@@ -273,6 +293,8 @@ export interface AgentContextShape {
   name: string;
   role: string;
   instructions: string;
+  // Nom affiché pour signer les réponses du spécialiste (ex: "Compta Flow").
+  displayName?: string;
 }
 
 /**
@@ -287,8 +309,11 @@ export const DC_FACADE_ROLE = 'Interlocuteur unique — façade conversationnell
 const NEUTRAL_BASE =
   'Tu es DC Intelligence, interlocuteur unique du client. Réponds en français, avec précision et concision.';
 
-export function buildAgentPrompt(agentContext?: AgentContextShape, opts?: { specialistContext?: AgentContextShape }): string {
+export function buildAgentPrompt(agentContext?: AgentContextShape, opts?: { specialistContext?: AgentContextShape; hasImages?: boolean }): string {
   const specialist = opts?.specialistContext;
+  const imageLine = opts?.hasImages
+    ? ' Une pièce jointe IMAGE est fournie avec le dernier message (vision) : analyse son contenu visuel en priorité (montants, tiers, dates, références) et intègre les données extraites dans ta réponse.'
+    : '';
   // Mémoire : l'historique (4-8 derniers messages) est injecté par l'appelant (App/Functions)
   // via `history` — jamais via le prompt statique. Le prompt liste les CAPACITÉS disponibles.
   const toolsLine = agentContext?.instructions?.includes('delegate_to_')
@@ -301,15 +326,18 @@ export function buildAgentPrompt(agentContext?: AgentContextShape, opts?: { spec
       : NEUTRAL_BASE;
     return (
       `${base}${toolsLine} Règle d'identité : tu restes DC Intelligence du premier au dernier message. ` +
-      `Tu ne dis jamais « je suis l'Agent Comptabilité/Juridique/Reco ».`
+      `Tu ne dis jamais « je suis l'Agent Comptabilité/Juridique/Reco ».` + imageLine
     );
   }
-  // Cas 2 : délégation → DC restitue l'expertise spécialiste, sans jamais révéler l'agent.
+  // Cas 2 : délégation → le spécialiste prend le relais et SIGNE de son nom
+  // (§3 : handoff explicite, pas de façade masquée). L'Accueil a déjà annoncé
+  // le routage dans sa réponse brève ; ici le spécialiste répond en son nom.
+  const signer = specialist.displayName || specialist.name;
   return (
-    `Tu es DC Intelligence, interlocuteur unique du client. ` +
-    `Tu disposes de l'expertise suivante à restituer : ${specialist.instructions} ` +
-    `Consigne stricte : ne révèle JAMAIS l'existence d'agents internes, de relais ou de retours (« agent comptable », « j'ai demandé à... », « il me revient que... » sont interdits). ` +
-    `Présente la réponse comme tienne, ou avec une formule neutre (« Laissez-moi vérifier... », « Voici ce que j'ai trouvé... »), ne simule pas de consultation si le résultat est vide.`
+    `Tu réponds en tant que « ${signer} », agent spécialisé de DC Intelligence. ` +
+    `Tu disposes de l'expertise suivante : ${specialist.instructions} ` +
+    `Consigne stricte : ne simule JAMAIS une consultation ou une vérification — si les données fournies (contexte, sources, pièces) sont insuffisantes, dis ce qu'il te manque au lieu d'inventer. ` +
+    `Présente la réponse comme tienne (« Voici ce que j'ai trouvé... »), avec précision et concision.` + imageLine
   );
 }
 
@@ -393,30 +421,54 @@ export function friendlyInferenceError(err: any): string {
  * Sur 429 : attend le délai conseillé (plafonné) puis rejoue UNE fois,
  * sinon lève LIMITE_ATTEINTE (message convivial via friendlyInferenceError).
  */
+export interface BackendChatStreamOpts {
+  stream?: boolean;
+  onToken?: (token: string) => void;
+  signal?: AbortSignal;
+  images?: string[];
+  hasImages?: boolean;
+  firstTokenTimeoutMs?: number;
+  maxTokens?: number;
+}
+
 async function callBackendChat(
   modelId: string,
   history: ChatMessage[],
   userMessage: string,
   reasoningEffort: ReasoningEffort,
   agentContext?: { name: string; role: string; instructions: string },
-  specialistContext?: { name: string; role: string; instructions: string },
-  attempt = 0
+  specialistContext?: { name: string; role: string; instructions: string; displayName?: string },
+  attempt = 0,
+  opts?: BackendChatStreamOpts
 ): Promise<string> {
-  const systemPrompt = buildAgentPrompt(agentContext, { specialistContext });
+  const systemPrompt = buildAgentPrompt(agentContext, { specialistContext, hasImages: opts?.hasImages });
   const messages: Array<{ role: string; content: string }> = [{ role: 'system', content: systemPrompt }];
   for (const m of history.slice(-8)) {
     messages.push({ role: m.sender === 'user' ? 'user' : 'assistant', content: m.content });
   }
   messages.push({ role: 'user', content: userMessage });
 
+  // Streaming SSE (§1.3) : affichage dès le 1er token, jamais d'attente complète.
+  if (opts?.stream && opts?.onToken) {
+    return streamBackendChat(modelId, messages, opts);
+  }
+
   let res: Response;
   try {
     res = await fetch(apiUrl('/chat'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: modelId, messages, temperature: 0.3, max_tokens: 3500 }),
+      signal: opts?.signal,
+      body: JSON.stringify({
+        model: modelId,
+        messages,
+        temperature: 0.3,
+        max_tokens: opts?.maxTokens || 3500,
+        ...(opts?.images?.length ? { imagePaths: opts.images } : {}),
+      }),
     });
-  } catch {
+  } catch (e: any) {
+    if (String(e?.name) === 'AbortError') throw new Error('backend_aborted');
     throw new Error('backend_unreachable');
   }
   if (res.status === 404) throw new Error('404 backend /api/chat absent (dev sans émulateur)');
@@ -428,13 +480,13 @@ async function callBackendChat(
     if (attempt === 0) {
       const waitSec = Math.min(Number((data as any)?.retry_after_seconds) || 60, 20);
       await new Promise((r) => setTimeout(r, waitSec * 1000));
-      return callBackendChat(modelId, history, userMessage, reasoningEffort, agentContext, specialistContext, 1);
+      return callBackendChat(modelId, history, userMessage, reasoningEffort, agentContext, specialistContext, 1, opts);
     }
     throw new Error('LIMITE_ATTEINTE');
   }
   if ((res.status === 502 || res.status === 504) && attempt === 0) {
     await new Promise((r) => setTimeout(r, 1500));
-    return callBackendChat(modelId, history, userMessage, reasoningEffort, agentContext, specialistContext, 1);
+    return callBackendChat(modelId, history, userMessage, reasoningEffort, agentContext, specialistContext, 1, opts);
   }
   if (res.status === 502 || res.status === 504) {
     throw new Error(`backend_${res.status}: indisponible temporairement, réessayez`);
@@ -445,6 +497,152 @@ async function callBackendChat(
   const reply = String((data as any)?.reply || '');
   if (!reply) throw new Error('backend_empty_reply');
   return reply;
+}
+
+/**
+ * Streaming SSE token-par-token (§1.3) via POST /api/chat { stream: true }.
+ * Le 1er token doit arriver sous firstTokenTimeoutMs (défaut 20 s, §5.1),
+ * sinon STREAM_FIRST_TOKEN_TIMEOUT. Tout le texte est retourné à la fin.
+ */
+async function streamBackendChat(
+  modelId: string,
+  messages: Array<{ role: string; content: string }>,
+  opts: BackendChatStreamOpts
+): Promise<string> {
+  const onToken = opts.onToken as (token: string) => void;
+  const firstTokenTimeoutMs = opts.firstTokenTimeoutMs ?? 20000;
+  let res: Response;
+  try {
+    res = await fetch(apiUrl('/chat'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+      signal: opts.signal,
+      body: JSON.stringify({
+        model: modelId,
+        messages,
+        temperature: 0.3,
+        max_tokens: opts.maxTokens || 3500,
+        stream: true,
+        ...(opts.images?.length ? { imagePaths: opts.images } : {}),
+      }),
+    });
+  } catch (e: any) {
+    if (String(e?.name) === 'AbortError') throw new Error('backend_aborted');
+    throw new Error('backend_unreachable');
+  }
+  const contentType = res.headers.get('content-type') || '';
+  if (!res.ok || !contentType.includes('text/event-stream')) {
+    // Repli : le backend a répondu en JSON (erreur mappée ou réponse complète).
+    const data = await res.json().catch(() => ({}));
+    if (res.status === 404) throw new Error('404 backend /api/chat absent (dev sans émulateur)');
+    if (res.status === 503 && (data as any)?.error === 'backend_not_configured') throw new Error('backend_not_configured');
+    if (res.status === 429) throw new Error('LIMITE_ATTEINTE');
+    if (res.status === 502 || res.status === 504) throw new Error(`backend_${res.status}: indisponible temporairement, réessayez`);
+    if (!res.ok) throw new Error(`backend_${res.status}: ${String((data as any)?.detail || (data as any)?.error || res.statusText).slice(0, 300)}`);
+    const reply = String((data as any)?.reply || '');
+    if (!reply) throw new Error('backend_empty_reply');
+    onToken(reply);
+    return reply;
+  }
+  const reader = res.body?.getReader();
+  if (!reader) throw new Error('backend_stream_unreadable');
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let full = '';
+  let gotFirstToken = false;
+  let firstTokenTimer: ReturnType<typeof setTimeout> | null = setTimeout(() => {
+    if (!gotFirstToken) {
+      try { reader.cancel(); } catch {}
+    }
+  }, firstTokenTimeoutMs);
+  const clearFirstTimer = () => {
+    if (firstTokenTimer) { clearTimeout(firstTokenTimer); firstTokenTimer = null; }
+  };
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const parts = buffer.split('\n\n');
+      buffer = parts.pop() || '';
+      for (const part of parts) {
+        for (const line of part.split('\n')) {
+          const t = line.trim();
+          if (!t.startsWith('data:')) continue;
+          const payload = t.slice(5).trim();
+          if (payload === '[DONE]') continue;
+          try {
+            const obj = JSON.parse(payload);
+            if (obj && typeof obj.error === 'string' && obj.error) {
+              throw new Error(`backend_stream_error: ${obj.error.slice(0, 300)}`);
+            }
+            const content = obj && typeof obj.content === 'string' ? obj.content : '';
+            if (content) {
+              if (!gotFirstToken) { gotFirstToken = true; clearFirstTimer(); }
+              full += content;
+              onToken(content);
+            }
+          } catch (e: any) {
+            if (String(e?.message || '').startsWith('backend_stream_error')) throw e;
+            // Ligne non-JSON : ignorée.
+          }
+        }
+      }
+      if (opts.signal?.aborted) throw new Error('backend_aborted');
+    }
+  } catch (e: any) {
+    clearFirstTimer();
+    if (String(e?.message) === 'backend_aborted') throw e;
+    if (!gotFirstToken) throw new Error('STREAM_FIRST_TOKEN_TIMEOUT');
+    // Coupure après le 1er token : on rend le partiel, l'appelant décide.
+    if (!full) throw new Error('backend_stream_interrompu');
+    return full;
+  }
+  clearFirstTimer();
+  if (!full) throw new Error('backend_empty_reply');
+  return full;
+}
+
+/**
+ * Réponse brève LLM (§2.1) : 1 à 2 phrases qui accusent réception, reformulent
+ * si besoin et annoncent l'action. Appel court non-streamé (max 150 tokens,
+ * timeout 8 s). En cas d'échec, l'appelant n'affiche RIEN (dots discrets).
+ */
+export async function callBackendBrief(params: {
+  modelId: string;
+  systemPrompt: string;
+  userPrompt: string;
+  maxTokens?: number;
+  timeoutMs?: number;
+}): Promise<string> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), params.timeoutMs ?? 8000);
+  try {
+    const res = await fetch(apiUrl('/chat'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal: ctrl.signal,
+      body: JSON.stringify({
+        model: params.modelId,
+        messages: [
+          { role: 'system', content: params.systemPrompt },
+          { role: 'user', content: params.userPrompt },
+        ],
+        temperature: 0.5,
+        max_tokens: params.maxTokens ?? 150,
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(`backend_${res.status}`);
+    const reply = String((data as any)?.reply || '').trim();
+    if (!reply) throw new Error('backend_empty_reply');
+    return reply;
+  } catch (e: any) {
+    if (String(e?.name) === 'AbortError') throw new Error('brief_timeout');
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /**

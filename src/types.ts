@@ -100,6 +100,8 @@ export interface ChatMessage {
   multimodalResult?: MultimodalResult;
   taskRef?: TaskObject;
   attachments?: ChatAttachment[];
+  // Streaming token-par-token en cours (§1.3) : curseur affiché, pas de dots.
+  streaming?: boolean;
 }
 
 export interface ChatSession {

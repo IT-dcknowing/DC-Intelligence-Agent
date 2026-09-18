@@ -25,8 +25,8 @@ async function api<T>(path: string, init?: RequestInit, timeoutMs = 15000): Prom
   }
 }
 
-const post = <T,>(path: string, body: unknown) =>
-  api<T>(path, { method: 'POST', body: JSON.stringify(body) });
+const post = <T,>(path: string, body: unknown, timeoutMs?: number) =>
+  api<T>(path, { method: 'POST', body: JSON.stringify(body) }, timeoutMs);
 const put = <T,>(path: string, body: unknown) =>
   api<T>(path, { method: 'PUT', body: JSON.stringify(body) });
 const del = <T,>(path: string) => api<T>(path, { method: 'DELETE' });
@@ -95,11 +95,12 @@ export async function searchKnowledge(query: string, topK = 2): Promise<RagHit[]
   }
 }
 
-/** Réindexation réelle côté serveur (chunks + embeddings reconstruits). */
+/** Réindexation réelle côté serveur (chunks + embeddings reconstruits, 120 s max). */
 export async function reindexKnowledge(id: string): Promise<KnowledgeDocument | null> {
   const data = await post<{ ok: boolean; document: any }>(
     `/knowledge/${encodeURIComponent(id)}/reindex`,
-    {}
+    {},
+    120000
   );
   if (!data || !data.ok || !data.document) return null;
   return mapKnowledgeDoc({ ...data.document, id });
@@ -127,12 +128,14 @@ export async function uploadKnowledge(file: File, category = 'RÉFÉRENCES'): Pr
     throw new Error('Fichier invalide ou trop volumineux (max 8 Mo).');
   }
   const base64 = await fileToBase64(file);
+  // 120 s : l'upload inclut stockage + extraction + indexation côté serveur.
+  // (15 s par défaut coupait la requête alors que le serveur continuait.)
   const data = await post<{ ok: boolean; document: any }>('/knowledge/upload', {
     name: file.name,
     mimeType: file.type || 'application/octet-stream',
     base64,
     category,
-  });
+  }, 120000);
   if (!data || !data.ok || !data.document) {
     throw new Error('Échec de l’envoi vers le serveur. Réessayez.');
   }
@@ -293,7 +296,8 @@ export async function uploadChatAttachment(sessionId: string, file: File): Promi
   const base64 = await fileToBase64(file);
   const data = await post<{ ok: boolean; storagePath: string; name: string; mimeType: string; size: number }>(
     '/chat/upload',
-    { sessionId, name: file.name, mimeType: file.type || 'application/octet-stream', base64 }
+    { sessionId, name: file.name, mimeType: file.type || 'application/octet-stream', base64 },
+    60000
   );
   if (!data || !data.ok || !data.storagePath) {
     throw new Error('Échec de l’envoi de la pièce jointe. Réessayez.');
