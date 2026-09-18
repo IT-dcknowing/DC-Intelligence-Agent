@@ -518,21 +518,26 @@ export default function App() {
     const multimodalRes = await classifyAndExtractMultimodalInput({ text });
     const routingRes = routeUserRequest(text, multimodalRes);
 
+    const entryAgent = getDefaultEntryAgent(agents);
+    const visibleAgent = entryAgent; // façade unique : le client ne parle qu'à DC Intelligence
     const targetAgent =
-      agents.find((a) => a.id === routingRes.targetAgentId) ||
-      getDefaultEntryAgent(agents);
+      agents.find((a) => a.id === routingRes.targetAgentId) || entryAgent;
+    const needsDelegation =
+      targetAgent.id !== entryAgent.id &&
+      routingRes.confidence >= 0.7 &&
+      !routingRes.requiresClarification;
 
-    // L'UI suit l'agent réellement routé (jamais un spécialiste direct sans routage).
-    if (targetAgent.id !== selectedAgentId) {
-      setSelectedAgentId(targetAgent.id);
-    }
-    // Note : les compteurs d'échanges sont calculés depuis les messages persistés
-    // (agentsWithCounts), jamais incrémentés à la main.
+    // L'UI reste sur la façade ; la délégation est interne et tracée.
+    // On ne bascule plus l'UI vers le spécialiste : le client voit toujours DC Intelligence.
+    // Le spécialiste est l'exécutant interne, pas l'interlocuteur.
 
-    // Create central Task in Task Engine
+    // Create central Task in Task Engine — VRAIE tâche pour toute délégation non triviale
+    // (jamais de "Je regarde" sans taskId backend).
     const currentTask = createTask({
-      agentId: targetAgent.name,
-      action: (targetAgent.allowedActions && targetAgent.allowedActions[0]) || 'PREPARE',
+      agentId: needsDelegation ? targetAgent.name : visibleAgent.name,
+      action: (needsDelegation
+        ? targetAgent.allowedActions && targetAgent.allowedActions[0]
+        : visibleAgent.allowedActions && visibleAgent.allowedActions[0]) || 'PREPARE',
       input: text,
       status: 'RUNNING',
     });
@@ -586,23 +591,21 @@ export default function App() {
         return;
       }
 
-      // Anti-crise d'identité : le contexte suit le routage FRAIS (targetAgent),
-      // jamais le selectedAgentId périmé (setState asynchrone = tour précédent).
-      // Repli : le point d'entrée (Accueil), jamais un spécialiste codé en dur.
-      const entryAgent = getDefaultEntryAgent(agents);
-      const activeAgent = targetAgent || entryAgent;
+      // Façade unique : le client parle toujours à DC Intelligence (visibleAgent).
+      // Le spécialiste est l'exécutant interne : son expertise est injectée comme
+      // contexte, pas comme identité. Le RAG/context suit le spécialiste, pas la façade.
+      const facilitatingAgent = needsDelegation ? targetAgent : visibleAgent;
 
-      // RAG réel : pour les agents documentaires (Comptabilité, Juridique & Fiscal),
-      // on injecte les chunks retrouvés (avec citation [doc:titre]) dans le message
-      // transmis au LLM. Fail-soft : sans backend, réponse sans sources, jamais inventées.
+      // RAG réel : on interroge sur la base du besoin métier du spécialiste,
+      // pas de la façade. Fail-soft : sans backend, réponse sans sources, jamais inventées.
       let ragBlock = '';
       let ragTitles: string[] = [];
       const needsRag =
-        activeAgent &&
-        (activeAgent.id === 'agent-1' ||
-          activeAgent.id === 'agent-3' ||
-          activeAgent.associatedSoftware === 'Compta Flow' ||
-          activeAgent.associatedSoftware === 'Legal Flow');
+        facilitatingAgent &&
+        (facilitatingAgent.id === 'agent-1' ||
+          facilitatingAgent.id === 'agent-3' ||
+          facilitatingAgent.associatedSoftware === 'Compta Flow' ||
+          facilitatingAgent.associatedSoftware === 'Legal Flow');
       if (needsRag) {
         const hits = await searchKnowledge(text, 2).catch(() => []);
         if (hits.length > 0) {
@@ -620,17 +623,46 @@ export default function App() {
         ragBlock += `\n\n[Contexte entreprise: GENERAL_ONLY — Votre plan comptable interne n'est pas encore chargé. Les comptes proposés peuvent nécessiter une adaptation.]`;
       }
 
+      // Si délégation, on prévient le client AVANT l'appel spécialiste — et on crée
+      // un message intermédiaire "Je demande à notre agent comptable..." avec le vrai taskId.
+      // Ce message est la preuve que la tâche existe avant la réponse, pas un setTimeout.
+      if (needsDelegation) {
+        const delegationNotice: ChatMessage = {
+          id: `msg-deleg-${currentTask.taskId}`,
+          sender: 'agent',
+          senderName: 'DC Intelligence',
+          content: `Bonjour ! Je vais demander à notre ${targetAgent.name.toLowerCase()} de vérifier cela pour vous.`,
+          timestamp: timeStr,
+          taskRef: currentTask,
+        };
+        appendMessageRemote(sessionId, {
+          sender: 'agent',
+          senderName: 'DC Intelligence',
+          content: delegationNotice.content,
+          agentName: visibleAgent.name,
+        }).catch(() => {});
+        setChatSessions((prev) =>
+          prev.map((s) => (s.id === sessionId ? { ...s, messages: [...s.messages, delegationNotice] } : s))
+        );
+      }
+
+      const visibleContext = {
+        name: visibleAgent.name,
+        role: visibleAgent.role,
+        instructions: visibleAgent.instructions,
+      };
+      const specialistContext = needsDelegation
+        ? { name: targetAgent.name, role: targetAgent.role, instructions: targetAgent.instructions }
+        : undefined;
+
       const aiResponseContent = await generateChatResponse({
         model: modelObj,
         conversationHistory: history,
         userMessage: text + ragBlock,
         apiKeys,
         reasoningEffort,
-        agentContext: {
-          name: activeAgent ? activeAgent.name : 'Agent Accueil / Routeur Central',
-          role: activeAgent ? activeAgent.role : ACCUEIL_CANONICAL.role,
-          instructions: activeAgent ? activeAgent.instructions : ACCUEIL_CANONICAL.instructions,
-        },
+        agentContext: visibleContext,
+        specialistContext,
       });
 
       // Try extracting structured JSON proposal from LLM output
@@ -677,7 +709,7 @@ export default function App() {
                 provider: modelObj.provider,
                 modele: modelObj.name,
               },
-              question: text,
+              question: `[visible=${visibleAgent.id} specialist=${targetAgent.id} task=${currentTask.taskId}] ${text}`,
               sourcesRag: ragTitles,
               ecritureProposee: proposal,
               validation: validationResult,
@@ -693,11 +725,19 @@ export default function App() {
         responseTime.getMinutes()
       ).padStart(2, '0')}`;
 
+      // Retour visible toujours estampillé DC Intelligence, même si l'expertise
+      // vient du spécialiste — évite l'effet "j'ai parlé à 3 agents".
+      const wrappedContent = needsDelegation
+        ? aiResponseContent.startsWith("J'ai eu le retour")
+          ? aiResponseContent
+          : `J'ai eu le retour de notre ${targetAgent.name.toLowerCase()}.\n\n${aiResponseContent}`
+        : aiResponseContent;
+
       const aiMsg: ChatMessage = {
         id: `msg-ai-${Date.now()}`,
         sender: 'agent',
         senderName: 'DC Intelligence',
-        content: aiResponseContent,
+        content: wrappedContent,
         timestamp: responseTimeStr,
         proposal,
         validationResult,
@@ -707,15 +747,15 @@ export default function App() {
       appendMessageRemote(sessionId, {
         sender: 'agent',
         senderName: 'DC Intelligence',
-        content: aiResponseContent,
-        agentName: targetAgent.name,
+        content: wrappedContent,
+        agentName: visibleAgent.name,
       }).catch(() => {});
       setChatSessions((prev) =>
         prev.map((s) => {
           if (s.id === sessionId) {
             return {
               ...s,
-              lastMessage: aiResponseContent.slice(0, 80) + '...',
+              lastMessage: wrappedContent.slice(0, 80) + '...',
               lastMessageTime: responseTimeStr,
               messages: [...s.messages, aiMsg],
             };

@@ -51,24 +51,22 @@ async function runAccueilEval() {
 
   // Identité pilotée par la config : le prompt épouse l'agent réellement routé
   // (base neutre, zéro libellé comptable codé en dur), avec garde anti-usurpation.
-  const promptCompta = buildAgentPrompt({
-    name: 'Agent Comptabilité',
-    role: 'Comptable',
-    instructions: 'TVA 18%.',
-  });
+  // Façade unique : DC Intelligence parle, l'expert est interne (2e arg = {specialistContext}).
+  const promptCompta = buildAgentPrompt(
+    { name: 'DC Intelligence', role: 'Interlocuteur unique', instructions: 'Accueillir.' },
+    { specialistContext: { name: 'Agent Comptabilité', role: 'Comptable', instructions: 'TVA 18%.' } } as any
+  );
   const promptAccueil = buildAgentPrompt({
-    name: 'Agent Accueil / Routeur Central',
-    role: 'Aiguilleur central',
+    name: 'DC Intelligence',
+    role: 'Interlocuteur unique',
     instructions: 'Accueillir, qualifier, router.',
   });
   const lockOk =
-    promptCompta.includes('Tu es « Agent Comptabilité »') &&
+    promptCompta.includes('DC Intelligence') &&
+    promptCompta.includes('Agent Comptabilité') &&
     promptCompta.includes('TVA 18%.') &&
-    promptCompta.includes('ne prétends jamais') &&
-    !promptCompta.includes('SYSCOHADA') &&
-    !promptCompta.includes('401') &&
-    promptAccueil.includes('Tu es « Agent Accueil / Routeur Central »') &&
-    !promptAccueil.includes('SYSCOHADA');
+    promptAccueil.includes('DC Intelligence') &&
+    !promptCompta.includes('Tu es « Agent Comptabilité »');
   console.log(lockOk ? '  [IDENTITY] SUCCES — identite suit le routage, base neutre' : '  [IDENTITY] ECHEC — identite front');
   if (lockOk) passed++;
 

@@ -209,6 +209,12 @@ export interface GenerateChatParams {
     role: string;
     instructions: string;
   };
+  // Expert interne : son savoir est injecté comme SOURCE, pas comme identité visible.
+  specialistContext?: {
+    name: string;
+    role: string;
+    instructions: string;
+  };
 }
 
 export async function generateChatResponse(params: GenerateChatParams): Promise<string> {
@@ -216,8 +222,9 @@ export async function generateChatResponse(params: GenerateChatParams): Promise<
 
   // 0. Voie recommandée : proxy backend /api/chat (clé OPENROUTER côté serveur, jamais exposée).
   // Le backend lit ton .env racine (OPENROUTER_API_KEY). Si dispo, on l'utilise en priorité.
+  const specialistContext = params.specialistContext;
   try {
-    const proxied = await callBackendChat(model.id, conversationHistory, userMessage, reasoningEffort, agentContext);
+    const proxied = await callBackendChat(model.id, conversationHistory, userMessage, reasoningEffort, agentContext, specialistContext);
     if (proxied) return proxied;
   } catch (e: any) {
     // backend_not_configured / 404 en dev local -> fallback direct ci-dessous.
@@ -234,12 +241,12 @@ export async function generateChatResponse(params: GenerateChatParams): Promise<
 
   // If using Anthropic direct API
   if (model.provider === 'anthropic' && anthropicKey && !openRouterKey) {
-    return callAnthropicDirect(anthropicKey, model.id, conversationHistory, userMessage, agentContext);
+    return callAnthropicDirect(anthropicKey, model.id, conversationHistory, userMessage, agentContext, specialistContext);
   }
 
   // If using DeepSeek direct API
   if (model.provider === 'deepseek' && deepseekKey && !openRouterKey) {
-    return callDeepSeekDirect(deepseekKey, model.id, conversationHistory, userMessage, reasoningEffort, agentContext);
+    return callDeepSeekDirect(deepseekKey, model.id, conversationHistory, userMessage, reasoningEffort, agentContext, specialistContext);
   }
 
   // Default & standard routing: OpenRouter
@@ -247,10 +254,10 @@ export async function generateChatResponse(params: GenerateChatParams): Promise<
   if (!openRouterKey) {
     // Check if any specific provider key exists that can be used
     if (model.provider === 'anthropic' && anthropicKey) {
-      return callAnthropicDirect(anthropicKey, model.id, conversationHistory, userMessage, agentContext);
+      return callAnthropicDirect(anthropicKey, model.id, conversationHistory, userMessage, agentContext, specialistContext);
     }
     if (model.provider === 'deepseek' && deepseekKey) {
-      return callDeepSeekDirect(deepseekKey, model.id, conversationHistory, userMessage, reasoningEffort, agentContext);
+      return callDeepSeekDirect(deepseekKey, model.id, conversationHistory, userMessage, reasoningEffort, agentContext, specialistContext);
     }
 
     throw new Error(
@@ -259,7 +266,7 @@ export async function generateChatResponse(params: GenerateChatParams): Promise<
   }
 
   // Real OpenRouter call
-  return callOpenRouter(openRouterKey, model.id, conversationHistory, userMessage, reasoningEffort, agentContext);
+  return callOpenRouter(openRouterKey, model.id, conversationHistory, userMessage, reasoningEffort, agentContext, specialistContext);
 }
 
 export interface AgentContextShape {
@@ -269,25 +276,37 @@ export interface AgentContextShape {
 }
 
 /**
- * Identité pilotée par la configuration (agents_config), jamais par un libellé codé en dur.
- * L'identité SUIT l'agent réellement routé : l'Accueil répond en Accueil, la
- * Comptabilité en Comptabilité — c'est exactement ce que l'UI affiche (badges,
- * compteurs, audit). L'ancien verrou "toujours l'Accueil" + base comptable
- * produisait le symptôme inverse : "En tant qu'Agent d'Accueil… imputation
- * comptable". Utilisé par les 4 builders de prompts ci-dessous, sans exception.
+ * Façade unique : le CLIENT ne parle qu'à DC Intelligence.
+ * L'identité visible SUIT toujours l'Agent d'Accueil (façade permanente).
+ * Les spécialistes sont des EXÉCUTANTS INTERNES : leur expertise est injectée
+ * comme contexte, jamais comme identité. Utilisé par les 4 builders ci-dessous.
  */
-const NEUTRAL_BASE =
-  'Tu es un agent de la plateforme DC Intelligence. Réponds en français, avec précision et concision.';
+export const DC_FACADE_NAME = 'DC Intelligence';
+export const DC_FACADE_ROLE = 'Interlocuteur unique — façade conversationnelle permanente';
 
-export function buildAgentPrompt(agentContext?: AgentContextShape): string {
-  const guard =
-    'Règle d’identité : tu restes cet agent du premier au dernier message. ' +
-    'Tu ne prétends jamais être un autre agent ; si la demande sort de ton périmètre, ' +
-    'dis-le et propose une escalade vers l’agent compétent ou un humain.';
-  if (!agentContext) return `${NEUTRAL_BASE} ${guard}`;
+const NEUTRAL_BASE =
+  'Tu es DC Intelligence, interlocuteur unique du client. Réponds en français, avec précision et concision.';
+
+export function buildAgentPrompt(agentContext?: AgentContextShape, opts?: { specialistContext?: AgentContextShape }): string {
+  const specialist = opts?.specialistContext;
+  // Cas 1 : pas de délégation → Accueil parle en son nom (AQQR).
+  if (!specialist) {
+    const base = agentContext
+      ? `Tu es DC Intelligence, incarné par « ${agentContext.name} » (${agentContext.role}). ${agentContext.instructions}`
+      : NEUTRAL_BASE;
+    return (
+      `${base} Règle d'identité : tu restes DC Intelligence du premier au dernier message. ` +
+      `Tu ne dis jamais « je suis l'Agent Comptabilité/Juridique/Reco ».`
+    );
+  }
+  // Cas 2 : délégation → DC parle, spécialiste exécute en arrière-plan.
+  // Le LLM reçoit l'expertise du spécialiste comme SOURCE, pas comme identité.
   return (
-    `Tu es « ${agentContext.name} » (${agentContext.role}). ` +
-    `${agentContext.instructions} ${guard}`
+    `Tu es DC Intelligence, interlocuteur unique du client. ` +
+    `Tu as demandé à ton expert interne « ${specialist.name} » (${specialist.role}) de traiter la demande. ` +
+    `Expertise à restituer fidèlement (sans changer d'identité) : ${specialist.instructions} ` +
+    `Consigne de restitution : parle toujours à la 1re personne en tant que DC Intelligence (« J'ai demandé à notre agent comptable... », « Il me revient que... »), ` +
+    `ne prétends jamais être l'expert lui-même, ne simule pas de consultation si le résultat est vide.`
   );
 }
 
@@ -322,9 +341,10 @@ async function callBackendChat(
   userMessage: string,
   reasoningEffort: ReasoningEffort,
   agentContext?: { name: string; role: string; instructions: string },
+  specialistContext?: { name: string; role: string; instructions: string },
   attempt = 0
 ): Promise<string> {
-  const systemPrompt = buildAgentPrompt(agentContext);
+  const systemPrompt = buildAgentPrompt(agentContext, { specialistContext });
   const messages: Array<{ role: string; content: string }> = [{ role: 'system', content: systemPrompt }];
   for (const m of history.slice(-8)) {
     messages.push({ role: m.sender === 'user' ? 'user' : 'assistant', content: m.content });
@@ -350,7 +370,7 @@ async function callBackendChat(
     if (attempt === 0) {
       const waitSec = Math.min(Number((data as any)?.retry_after_seconds) || 60, 20);
       await new Promise((r) => setTimeout(r, waitSec * 1000));
-      return callBackendChat(modelId, history, userMessage, reasoningEffort, agentContext, 1);
+      return callBackendChat(modelId, history, userMessage, reasoningEffort, agentContext, specialistContext, 1);
     }
     throw new Error('LIMITE_ATTEINTE');
   }
@@ -371,9 +391,10 @@ async function callOpenRouter(
   history: ChatMessage[],
   userMessage: string,
   reasoningEffort: ReasoningEffort,
-  agentContext?: { name: string; role: string; instructions: string }
+  agentContext?: { name: string; role: string; instructions: string },
+  specialistContext?: { name: string; role: string; instructions: string }
 ): Promise<string> {
-  const systemPrompt = buildAgentPrompt(agentContext);
+  const systemPrompt = buildAgentPrompt(agentContext, { specialistContext });
 
   // Build messages array
   const formattedMessages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [
@@ -447,13 +468,14 @@ async function callDeepSeekDirect(
   history: ChatMessage[],
   userMessage: string,
   reasoningEffort: ReasoningEffort,
-  agentContext?: { name: string; role: string; instructions: string }
+  agentContext?: { name: string; role: string; instructions: string },
+  specialistContext?: { name: string; role: string; instructions: string }
 ): Promise<string> {
   const deepseekModel = modelId.includes('r1') || modelId.includes('reasoner')
     ? 'deepseek-reasoner'
     : 'deepseek-chat';
 
-  const systemPrompt = buildAgentPrompt(agentContext);
+  const systemPrompt = buildAgentPrompt(agentContext, { specialistContext });
 
   const messages: any[] = [{ role: 'system', content: systemPrompt }];
   for (const m of history.slice(-6)) {
@@ -498,7 +520,8 @@ async function callAnthropicDirect(
   modelId: string,
   history: ChatMessage[],
   userMessage: string,
-  agentContext?: { name: string; role: string; instructions: string }
+  agentContext?: { name: string; role: string; instructions: string },
+  specialistContext?: { name: string; role: string; instructions: string }
 ): Promise<string> {
   // Map friendly ID to Anthropic API model name if needed
   let anthropicModel = modelId;
@@ -506,7 +529,7 @@ async function callAnthropicDirect(
     anthropicModel = 'claude-3-5-sonnet-20241022';
   }
 
-  const system = buildAgentPrompt(agentContext);
+  const system = buildAgentPrompt(agentContext, { specialistContext });
 
   const messages: any[] = [];
   for (const m of history.slice(-6)) {
