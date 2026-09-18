@@ -1,251 +1,194 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Lora:ital,wght@0,400;0,500;0,600;1,400&family=JetBrains+Mono:wght@400;500&family=Playfair+Display:ital,wght@0,500;1,500&display=swap');
 @import "tailwindcss";
 
+/* ============================================================
+   DC INTELLIGENCE — Design System Claude.ai + Branding Noir & Blanc
+   Editorial. Sérieux. Digne de confiance.
+   ============================================================ */
 :root {
-  /* ─── Monochrome palette ─── */
-  --color-black: #000000;
-  --color-zinc-900: #18181B;
-  --color-zinc-800: #27272A;
+  /* — Palette Noir & Blanc — spec exacte */
+  --claude-bg-main: #FFFFFF;
+  --claude-bg-sidebar: #FAFAFA;
+  --claude-bg-ai: #FFFFFF;
+  --claude-bg-user: #171717;          /* charbon, jamais #000 pur */
+  --claude-text-user: #FFFFFF;
+  --claude-text-primary: #1F1F1E;
+  --claude-text-secondary: #6B6B6B;
+  --claude-text-muted: #9CA3AF;
+  --claude-border: #E8E8E6;            /* 1px subtil */
+  --claude-hover: #F0F0EE;
+  --claude-active: #EBEBE9;
+  --claude-code-bg: #F4F4F5;
+
+  /* Compat legacy */
+  --color-black: #171717;
+  --color-zinc-900: #1F1F1E;
   --color-zinc-700: #3F3F46;
-  --color-zinc-600: #52525B;
-  --color-zinc-500: #71717A;
+  --color-zinc-500: #6B6B6B;
   --color-zinc-400: #A1A1AA;
   --color-zinc-300: #D4D4D8;
-  --color-zinc-200: #E4E4E7;
-  --color-zinc-100: #F4F4F5;
+  --color-zinc-200: #E8E8E6;
+  --color-zinc-100: #F0F0EE;
   --color-zinc-50: #FAFAFA;
   --color-white: #FFFFFF;
-
-  /* ─── Surfaces ─── */
   --surface-primary: #FFFFFF;
   --surface-secondary: #FAFAFA;
-  --surface-tertiary: #F4F4F5;
-  --surface-hover: #F4F4F5;
-
-  /* ─── Text ─── */
-  --text-primary: #09090B;
-  --text-secondary: #52525B;
-  --text-tertiary: #71717A;
-  --text-muted: #A1A1AA;
-  --text-inverse: #FFFFFF;
-
-  /* ─── Borders ─── */
-  --border-default: #E5E5E7;
+  --surface-tertiary: #F0F0EE;
+  --text-primary: #1F1F1E;
+  --text-secondary: #6B6B6B;
+  --text-muted: #9CA3AF;
+  --border-default: #E8E8E6;
   --border-hover: #D4D4D8;
-  --border-focus: #000000;
-
-  /* ─── Shadows: subtle only ─── */
+  --border-focus: #171717;
   --shadow-xs: 0 1px 2px rgba(0,0,0,0.04);
-  --shadow-sm: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
-
-  /* ─── Radius ─── */
-  --radius-sm: 6px;
-  --radius-md: 8px;
-  --radius-lg: 12px;
-  --radius-xl: 16px;
+  --shadow-sm: 0 2px 12px rgba(0,0,0,0.04);
+  --shadow-focus: 0 4px 20px rgba(0,0,0,0.08);
   --radius-full: 9999px;
-
-  /* ─── Spacing ─── */
-  --space-xs: 4px;
-  --space-sm: 8px;
-  --space-md: 16px;
-  --space-lg: 24px;
-  --space-xl: 32px;
-  --space-2xl: 48px;
-
-  /* ─── Only accent allowed: WhatsApp green ─── */
-  --accent-whatsapp: #25D366;
-  --accent-whatsapp-light: #DCFCE7;
 }
 
-/* ─── Base ─── */
-*, *::before, *::after {
-  box-sizing: border-box;
-}
-
+/* Base — UI font Inter, lissage soigné */
+*, *::before, *::after { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
 body {
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  color: var(--text-primary);
-  background-color: var(--surface-primary);
+  color: var(--claude-text-primary);
+  background: var(--claude-bg-main);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   font-size: 14px;
   line-height: 1.5;
 }
 
-/* ─── Monospace ─── */
+/* Code = JetBrains Mono */
 code, kbd, samp, pre, .font-mono {
-  font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
 }
 
-/* ─── Scrollbar ─── */
-* {
-  scrollbar-width: thin;
-  scrollbar-color: var(--color-zinc-300) transparent;
+/* ========== TYPOGRAPHIE CHAT — Lora (éditorial) ========== */
+/* Le contenu IA utilise Lora, l'UI reste en Inter */
+.claude-prose {
+  font-family: 'Lora', 'Georgia', 'Charter', serif;
+  font-size: 16px;
+  font-weight: 400;
+  line-height: 1.65;
+  color: var(--claude-text-primary);
 }
+.claude-prose p { margin-bottom: 16px; }
+.claude-prose p:last-child { margin-bottom: 0; }
+.claude-prose h1 {
+  font-family: 'Inter', sans-serif;
+  font-size: 24px; font-weight: 600; line-height: 1.3;
+  color: var(--claude-text-primary);
+  margin-top: 32px; margin-bottom: 16px;
+}
+.claude-prose h2 {
+  font-family: 'Inter', sans-serif;
+  font-size: 20px; font-weight: 600; line-height: 1.4;
+  color: var(--claude-text-primary);
+  margin-top: 28px; margin-bottom: 12px;
+}
+.claude-prose h3 {
+  font-family: 'Inter', sans-serif;
+  font-size: 18px; font-weight: 600; line-height: 1.4;
+  color: var(--claude-text-primary);
+  margin-top: 20px; margin-bottom: 8px;
+}
+.claude-prose strong { font-weight: 600; color: var(--claude-text-primary); }
+.claude-prose em { font-style: italic; font-weight: 400; color: #4A4A4A; }
+.claude-prose hr { border: 0; border-top: 1px solid var(--claude-border); margin: 32px 0; }
+.claude-prose a { color: var(--claude-text-primary); text-decoration: underline; text-underline-offset: 3px; }
+.claude-prose a:hover { color: #000; }
+.claude-prose ul, .claude-prose ol {
+  margin-bottom: 16px; padding-left: 24px;
+}
+.claude-prose li { margin-bottom: 8px; }
+.claude-prose li::marker { color: var(--claude-text-secondary); }
+.claude-prose ul { list-style-type: disc; }
+.claude-prose ol { list-style-type: decimal; }
+.claude-prose blockquote {
+  border-left: 2px solid var(--claude-border);
+  padding-left: 16px; margin: 16px 0;
+  color: var(--claude-text-secondary); font-style: italic;
+}
+.claude-prose code {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 13px; background: var(--claude-code-bg);
+  padding: 2px 6px; border-radius: 6px; border: 1px solid var(--claude-border);
+}
+.claude-prose pre {
+  background: #171717; color: #E8E8E6;
+  padding: 16px 20px; border-radius: 12px;
+  overflow-x: auto; margin: 16px 0;
+  border: 1px solid #2A2A2A;
+}
+.claude-prose pre code {
+  background: transparent; border: none; padding: 0;
+  color: inherit; font-size: 13px; line-height: 1.6;
+}
+.claude-prose table { width: 100%; border-collapse: collapse; margin: 16px 0; font-family: 'Inter', sans-serif; font-size: 14px; }
+.claude-prose th { text-align: left; font-weight: 600; padding: 10px 12px; border-bottom: 1px solid var(--claude-border); background: var(--claude-bg-sidebar); }
+.claude-prose td { padding: 10px 12px; border-bottom: 1px solid var(--claude-border); }
+.claude-prose .emoji { font-size: 1.1em; vertical-align: -0.1em; }
+
+/* ========== SCROLLBAR ========== */
+* { scrollbar-width: thin; scrollbar-color: #D4D4D8 transparent; }
 ::-webkit-scrollbar { width: 5px; height: 5px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background-color: var(--color-zinc-200); border-radius: 99px; }
-::-webkit-scrollbar-thumb:hover { background-color: var(--color-zinc-300); }
+::-webkit-scrollbar-thumb { background: #E8E8E6; border-radius: 99px; }
+::-webkit-scrollbar-thumb:hover { background: #D4D4D8; }
 
-/* ─── Global transitions ─── */
-.transition-smooth {
-  transition: all 200ms cubic-bezier(0.4, 0, 0.2, 1);
+/* ========== ANIMATIONS — extraites du HTML de référence ========== */
+/* Message entrée — fluide, éditorial */
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateY(15px); }
+  to { opacity: 1; transform: translateY(0); }
 }
+.message-enter { animation: fadeInUp 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
 
-/* ─── Shimmer skeleton ─── */
-@keyframes shimmer {
-  0%   { background-position: -200% 0; }
-  100% { background-position:  200% 0; }
+/* Onde sonore — 8 barres, hauteurs aléatoires */
+.waveform-bar {
+  width: 3px; background: #171717; border-radius: 99px;
+  animation: sound 0ms -800ms linear infinite alternate;
+  transition: height 0.1s ease;
 }
-.animate-shimmer {
-  background: linear-gradient(90deg, var(--color-zinc-100) 25%, var(--color-zinc-200) 50%, var(--color-zinc-100) 75%);
-  background-size: 200% 100%;
-  animation: shimmer 1.5s infinite linear;
-}
-
-/* ─── Fade-in utility ─── */
-@keyframes fadeIn {
-  from { opacity: 0; transform: translateY(4px); }
-  to   { opacity: 1; transform: translateY(0); }
-}
-.animate-in {
-  animation: fadeIn 200ms ease-out forwards;
-}
-.fade-in { animation: fadeIn 200ms ease-out forwards; }
-
-/* ─── Spin ─── */
-@keyframes spin {
-  to { transform: rotate(360deg); }
-}
-.animate-spin {
-  animation: spin 1s linear infinite;
+@keyframes sound {
+  0% { height: 4px; opacity: 0.4; }
+  100% { height: 16px; opacity: 1; }
 }
 
-/* ─── Ping ─── */
-@keyframes ping {
-  75%, 100% { transform: scale(2); opacity: 0; }
+/* Typing dots — rebond Claude */
+@keyframes bounce { 0%,80%,100% { transform: scale(0); } 40% { transform: scale(1); } }
+.typing-dot {
+  width: 6px; height: 6px; background: #9CA3AF; border-radius: 50%;
+  display: inline-block; animation: bounce 1.4s infinite ease-in-out both;
 }
-.animate-ping {
-  animation: ping 1.2s cubic-bezier(0, 0, 0.2, 1) infinite;
-}
+.typing-dot:nth-child(1) { animation-delay: -0.32s; }
+.typing-dot:nth-child(2) { animation-delay: -0.16s; }
 
-/* ─── Typography scale ─── */
-.text-display { font-size: 28px; font-weight: 700; letter-spacing: -0.02em; }
-.text-heading  { font-size: 22px; font-weight: 700; letter-spacing: -0.01em; }
-.text-title    { font-size: 16px; font-weight: 600; }
-.text-body     { font-size: 14px; font-weight: 400; }
-.text-label    { font-size: 12px; font-weight: 500; letter-spacing: 0.04em; text-transform: uppercase; }
-.text-micro    { font-size: 11px; font-weight: 500; color: var(--text-muted); }
+/* Shimmer / spin / ping (conservés pour compat) */
+@keyframes shimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes ping { 75%,100% { transform: scale(2); opacity: 0; } }
+.animate-shimmer { background: linear-gradient(90deg, #F0F0EE 25%, #E8E8E6 50%, #F0F0EE 75%); background-size: 200% 100%; animation: shimmer 1.5s infinite linear; }
+.animate-spin { animation: spin 1s linear infinite; }
+.animate-ping { animation: ping 1.2s cubic-bezier(0,0,0.2,1) infinite; }
 
-/* ─── DC INTELLIGENCE: Acme/shadcn component tokens ─── */
+/* Transcription — italique gris */
+.is-transcribing { color: #6B6B6B !important; font-style: italic; }
 
-/* Card */
-.card {
-  background: var(--surface-primary);
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-lg);
-  padding: var(--space-lg);
-}
+/* Focus visible — Noir & Blanc */
+*:focus-visible { outline: 2px solid #171717; outline-offset: 2px; }
+textarea:focus { outline: none; box-shadow: none; }
 
-/* Button: solid black (primary CTA) */
-.btn-primary {
-  display: inline-flex; align-items: center; gap: 6px;
-  padding: 9px 16px;
-  background: var(--color-black);
-  color: var(--text-inverse);
-  border: 1px solid var(--color-black);
-  border-radius: var(--radius-md);
-  font-size: 13px; font-weight: 600;
-  cursor: pointer;
-  transition: background 150ms, transform 100ms;
-}
-.btn-primary:hover { background: var(--color-zinc-900); }
+/* Transitions globales — douces */
+.transition-smooth { transition: all 0.15s ease; }
+
+/* Sélection */
+::selection { background: #E8E8E6; }
+
+/* Cartes legacy — adaptées au noir & blanc */
+.card { background: var(--surface-primary); border: 1px solid var(--border-default); border-radius: 12px; padding: 24px; }
+.btn-primary { display:inline-flex; align-items:center; gap:6px; padding:9px 16px; background:#171717; color:#fff; border:1px solid #171717; border-radius:8px; font-size:13px; font-weight:600; cursor:pointer; transition: background 150ms, transform 100ms; }
+.btn-primary:hover { background:#2A2A2A; }
 .btn-primary:active { transform: scale(0.98); }
-.btn-primary:disabled { opacity: 0.45; cursor: not-allowed; }
-
-/* Button: outline (secondary) */
-.btn-outline {
-  display: inline-flex; align-items: center; gap: 6px;
-  padding: 8px 14px;
-  background: transparent;
-  color: var(--text-primary);
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-md);
-  font-size: 13px; font-weight: 500;
-  cursor: pointer;
-  transition: background 150ms, border-color 150ms;
-}
-.btn-outline:hover { background: var(--surface-tertiary); border-color: var(--border-hover); }
-
-/* Badge: monochrome */
-.badge {
-  display: inline-flex; align-items: center; gap: 4px;
-  padding: 2px 8px;
-  background: var(--color-zinc-100);
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-full);
-  font-size: 11px; font-weight: 500;
-  color: var(--text-primary);
-}
-
-/* Pill tab: active/inactive */
-.pill-tab {
-  padding: 5px 14px;
-  border-radius: var(--radius-full);
-  font-size: 13px; font-weight: 500;
-  cursor: pointer;
-  transition: all 150ms;
-  background: transparent;
-  border: 1px solid var(--border-default);
-  color: var(--text-secondary);
-}
-.pill-tab.active {
-  background: var(--color-black);
-  border-color: var(--color-black);
-  color: var(--text-inverse);
-}
-
-/* Input */
-.input-base {
-  width: 100%;
-  padding: 9px 12px;
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-md);
-  font-size: 14px;
-  color: var(--text-primary);
-  background: var(--surface-primary);
-  transition: border-color 150ms, box-shadow 150ms;
-  outline: none;
-}
-.input-base:focus {
-  border-color: var(--color-black);
-  box-shadow: 0 0 0 3px rgba(0,0,0,0.07);
-}
-.input-base::placeholder { color: var(--text-muted); }
-
-/* Divider */
-.divider {
-  height: 1px;
-  background: var(--border-default);
-  margin: 0;
-}
-
-/* Status dot: active */
-.status-dot-active {
-  width: 6px; height: 6px;
-  border-radius: 50%;
-  background: var(--color-zinc-500);
-  display: inline-block;
-}
-/* Status dot: inactive */
-.status-dot-inactive {
-  width: 6px; height: 6px;
-  border-radius: 50%;
-  background: var(--color-zinc-300);
-  display: inline-block;
-}
-
-/* WhatsApp specific accent (exception) */
-.whatsapp-green { color: var(--accent-whatsapp); }
-.whatsapp-bg { background: var(--accent-whatsapp-light); }
+.btn-primary:disabled { opacity:0.4; cursor:not-allowed; }

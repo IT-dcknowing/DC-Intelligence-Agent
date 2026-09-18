@@ -36,6 +36,9 @@ import { transcribeAudioWithGroq } from '../services/voiceService';
 import { executeSoftwareTool } from '../services/mcpClient';
 import { logMcpCall } from '../services/auditLog';
 import { getAccountingContext } from '../services/companyContextService';
+import { InputArea as ClaudeInputArea } from './claude/InputArea';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 
 interface AssistantViewProps {
   sessions: ChatSession[];
@@ -522,10 +525,11 @@ export const AssistantView: React.FC<AssistantViewProps> = ({
       {/* ==================================================================== */}
       <aside
         id="assistant-sessions-sidebar"
-        className="w-[290px] md:w-[320px] h-full border-r border-[#E2E8F0] bg-[#F8FAFC] flex flex-col shrink-0 select-none z-10"
+        className="w-[270px] md:w-[280px] h-full border-r flex flex-col shrink-0 select-none z-10"
+        style={{ background: '#FAFAFA', borderColor: '#E8E8E6' }}
       >
         {/* Header : Title + New Session Button */}
-        <div className="p-4 border-b border-[#E2E8F0] bg-white space-y-3">
+        <div className="p-3 border-b bg-white space-y-3" style={{ borderColor: '#E8E8E6' }}>
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               <div className="w-7 h-7 rounded-lg bg-black text-white flex items-center justify-center font-bold text-xs shadow-xs">
@@ -548,15 +552,18 @@ export const AssistantView: React.FC<AssistantViewProps> = ({
             </button>
           </div>
 
-          {/* Search bar */}
+          {/* Search bar — subtile, sans bordure lourde */}
           <div className="relative">
-            <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-[#94A3B8]" />
+            <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2" style={{ color: '#9CA3AF' }} />
             <input
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Rechercher une session..."
-              className="w-full pl-8 pr-3 py-1.5 text-[12px] bg-[#F8FAFC] border border-[#E2E8F0] rounded-lg placeholder:text-[#94A3B8] text-[#1E293B] focus:bg-white focus:outline-none focus:border-black transition-all"
+              placeholder="Rechercher..."
+              className="w-full pl-8 pr-3 py-1.5 bg-white border rounded-md text-[13px] placeholder:text-[#9CA3AF] focus:outline-none transition-colors"
+              style={{ borderColor: '#E8E8E6', color: '#1F1F1E', fontFamily: "'Inter', sans-serif" }}
+              onFocus={(e) => ((e.currentTarget as HTMLElement).style.borderColor = '#6B6B6B')}
+              onBlur={(e) => ((e.currentTarget as HTMLElement).style.borderColor = '#E8E8E6')}
             />
           </div>
         </div>
@@ -581,11 +588,18 @@ export const AssistantView: React.FC<AssistantViewProps> = ({
                   key={session.id}
                   id={`session-item-${session.id}`}
                   onClick={() => onSelectSession(session.id)}
-                  className={`group relative p-3 rounded-xl cursor-pointer transition-all duration-150 border ${
-                    isSelected
-                      ? 'bg-white border-black text-[#09090B] shadow-xs'
-                      : 'bg-transparent border-transparent hover:bg-white/80 hover:border-[#E2E8F0] text-[#475569]'
-                  }`}
+                  className="group relative p-2.5 rounded-md cursor-pointer"
+                  style={{
+                    background: isSelected ? '#EBEBE9' : 'transparent',
+                    border: 'none',
+                    transition: 'all 0.15s ease',
+                  }}
+                  onMouseEnter={(e) => {
+                    if (!isSelected) (e.currentTarget as HTMLElement).style.background = '#F0F0EE';
+                  }}
+                  onMouseLeave={(e) => {
+                    if (!isSelected) (e.currentTarget as HTMLElement).style.background = 'transparent';
+                  }}
                 >
                   {isEditing ? (
                     <form
@@ -756,11 +770,13 @@ export const AssistantView: React.FC<AssistantViewProps> = ({
           </div>
         )}
 
-        {/* Chat Messages Scrollable Feed */}
+        {/* Chat Messages Scrollable Feed — Claude centered 740px, gap 32px */}
         <div
           id="assistant-messages-scroll"
-          className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-6"
+          className="flex-1 overflow-y-auto px-6 py-8 space-y-8"
+          style={{ scrollBehavior: 'smooth' }}
         >
+          <div className="max-w-[740px] mx-auto w-full flex flex-col" style={{ gap: '32px' }}>
           {(!activeSession || activeSession.messages.length === 0) ? (
             /* Empty session state with quick accounting starters */
             <div className="max-w-2xl mx-auto py-8 text-center select-none">
@@ -807,29 +823,28 @@ export const AssistantView: React.FC<AssistantViewProps> = ({
                 <div
                   key={msg.id}
                   id={`message-row-${msg.id}`}
-                  className={`flex gap-3 max-w-3xl ${
-                    isUser ? 'ml-auto justify-end' : 'mr-auto justify-start'
-                  }`}
+                  className={`flex gap-4 w-full message-enter ${isUser ? 'justify-end' : 'justify-start'}`}
                 >
                   {!isUser && (
-                    <div className="w-8 h-8 rounded-lg bg-black text-white flex items-center justify-center font-bold text-xs shrink-0 mt-0.5 border border-zinc-800">
-                      CF
+                    <div className="w-8 h-8 rounded-md bg-[#171717] text-white flex items-center justify-center font-bold text-xs shrink-0 mt-1 shadow-sm" style={{ fontFamily: "'Inter', sans-serif" }}>
+                      DC
                     </div>
                   )}
 
-                  <div className={`flex flex-col ${isUser ? 'items-end' : 'items-start'} max-w-[88%]`}>
-                    <div className="flex items-center gap-2 mb-1 px-1 text-[11px] text-[#94A3B8]">
-                      <span className="font-semibold text-[#475569]">{msg.senderName}</span>
+                  <div className={`flex flex-col ${isUser ? 'items-end' : 'items-start'} ${isUser ? 'max-w-[70%]' : 'max-w-[calc(100%-3rem)] flex-1 min-w-0'}`}>
+                    <div className="flex items-center gap-2 mb-2 px-1" style={{ fontFamily: "'Inter', sans-serif", fontSize: '11px', color: '#9CA3AF' }}>
+                      <span style={{ fontWeight: 500, color: isUser ? '#9CA3AF' : '#6B6B6B' }}>{msg.senderName}</span>
                       <span>•</span>
                       <span>{msg.timestamp}</span>
                     </div>
 
                     <div
-                      className={`relative group p-4 rounded-2xl text-[13px] leading-relaxed shadow-xs ${
+                      className={`relative group ${isUser ? 'px-5 py-3.5 rounded-[20px] rounded-tr-[4px] shadow-sm' : 'py-1'}`}
+                      style={
                         isUser
-                          ? 'bg-black text-white rounded-tr-none'
-                          : 'bg-[#F8FAFC] text-[#1E293B] border border-[#E2E8F0] rounded-tl-none'
-                      }`}
+                          ? { background: '#171717', color: '#FFFFFF', fontFamily: "'Inter', sans-serif", fontSize: '15px', lineHeight: '1.5' }
+                          : { background: '#FFFFFF', color: '#1F1F1E', fontFamily: "'Lora', 'Georgia', serif", fontSize: '16px', lineHeight: '1.65' }
+                      }
                     >
                       {/* Multimodal Classifier & Router Badge */}
                       {msg.multimodalResult && (
@@ -842,9 +857,13 @@ export const AssistantView: React.FC<AssistantViewProps> = ({
                         </div>
                       )}
 
-                      {/* Formatted Markdown / Text content */}
-                      <div className="whitespace-pre-wrap font-sans space-y-2">
-                        {renderMessageContent(msg.content, isUser)}
+                      {/* Contenu — Markdown rendu (jamais de syntaxe brute) */}
+                      <div className={isUser ? 'whitespace-pre-wrap' : 'claude-prose'}>
+                        {isUser ? (
+                          <span style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{msg.content}</span>
+                        ) : (
+                          <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
+                        )}
                       </div>
 
                       {/* Interactive SYSCOHADA Proposal Card & Validation Pipeline */}
@@ -1153,6 +1172,7 @@ export const AssistantView: React.FC<AssistantViewProps> = ({
           )}
 
           <div ref={messagesEndRef} />
+          </div>
         </div>
 
         {/* Attached Files Preview */}
@@ -1280,69 +1300,39 @@ export const AssistantView: React.FC<AssistantViewProps> = ({
               <span>Transcription vocale avec Groq Whisper en cours...</span>
             </div>
           ) : (
-            /* Standard Text Input */
-            <div className="border border-[#E2E8F0] focus-within:border-black rounded-2xl bg-white shadow-2xs transition-all">
-              <textarea
-                ref={textareaRef}
-                value={inputText}
-                onChange={handleTextareaInput}
-                onKeyDown={handleKeyDown}
-                rows={1}
-                placeholder="Posez votre question ou dictez une facture (Entrée pour envoyer, Maj+Entrée pour saut de ligne)..."
-                className="w-full px-4 pt-3.5 pb-2 text-[13px] text-[#1E293B] placeholder:text-[#94A3B8] resize-none focus:outline-none bg-transparent max-h-[180px]"
-              />
-
-              {/* Input Toolbar */}
-              <div className="px-3 pb-2.5 pt-1 flex items-center justify-between text-[#64748B]">
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => fileInputRef.current?.click()}
-                    title="Joindre une facture ou justificatif (glisser-déposer aussi)"
-                    className="p-1.5 rounded-lg hover:bg-zinc-100 hover:text-black transition-colors"
-                  >
-                    <Paperclip className="w-4 h-4" />
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={startVoiceRecording}
-                    title="Dictée vocale (Groq Whisper)"
-                    className="p-1.5 rounded-lg hover:bg-zinc-100 hover:text-black transition-colors flex items-center gap-1 text-[12px]"
-                  >
-                    <Mic className="w-4 h-4" />
-                    <span className="hidden sm:inline">Vocal</span>
-                  </button>
-
-                  <div className="h-4 w-px bg-zinc-200 mx-1 hidden sm:block" />
-
-                  <span className="hidden sm:inline text-[11px] text-[#94A3B8]">
-                    SYSCOHADA Révisé
-                  </span>
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => handleSubmitMessage()}
-                    disabled={(!inputText.trim() && attachedFiles.length === 0) || isGenerating}
-                    title={isGenerating ? 'Génération en cours…' : 'Envoyer le message (Entrée)'}
-                    aria-busy={isGenerating}
-                    className={`p-2 rounded-xl transition-all ${
-                      (inputText.trim() || attachedFiles.length > 0) && !isGenerating
-                        ? 'bg-black text-white hover:bg-zinc-800 shadow-xs cursor-pointer active:scale-95'
-                        : 'bg-zinc-100 text-zinc-400 cursor-not-allowed'
-                    }`}
-                  >
-                    {isGenerating ? (
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                    ) : (
-                      <ArrowUp className="w-4 h-4 stroke-[2.5]" />
-                    )}
-                  </button>
-                </div>
-              </div>
-            </div>
+            /* Input Claude — Noir & Blanc, toolbar + waveform, Lora en transcription */
+            <ClaudeInputArea
+              value={inputText}
+              onChange={setInputText}
+              onSend={() => handleSubmitMessage()}
+              onKeyDown={handleKeyDown}
+              placeholder="Posez votre question fiscale, dictez une facture..."
+              isGenerating={isGenerating}
+              voiceState={voiceState}
+              onStartRecording={startVoiceRecording}
+              onStopRecording={handleStopRecording}
+              onCancelRecording={handleCancelRecording}
+              onFileSelect={(files) => handleFiles(files)}
+              onDrop={handleDrop}
+              onDragOver={handleDragOver}
+              onDragLeave={handleDragLeave}
+              attachedFilesCount={attachedFiles.length}
+              modelSelector={
+                <ModelSelector
+                  models={models}
+                  selectedModelId={selectedModelId}
+                  onSelectModel={onSelectModel}
+                  apiKeys={apiKeys}
+                  onNavigateToApiKeys={onNavigateToApiKeys}
+                  reasoningEffort={reasoningEffort}
+                  onChangeReasoningEffort={onChangeReasoningEffort}
+                  onOpenAddModelModal={onOpenAddModelModal}
+                  onRefreshOpenRouter={onRefreshOpenRouter}
+                  isRefreshingModels={isRefreshingModels}
+                  onDeleteCustomModel={onDeleteCustomModel}
+                />
+              }
+            />
           )}
         </div>
       </section>
