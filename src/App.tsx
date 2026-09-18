@@ -66,6 +66,7 @@ import {
   fetchBackendModels,
   generateChatResponse,
   callBackendBrief,
+  isVisionModel,
   friendlyInferenceError,
 } from './services/llmService';
 import { getAccountingContext } from './services/companyContextService';
@@ -578,6 +579,13 @@ export default function App() {
       }
     }
 
+    // Nature MIME réelle de la pièce (pas l'extension) : images → vision LLM,
+    // PDF → texte extrait côté serveur, autres → classification seule.
+    const fileIsImage = Boolean(file && /^image\//.test(file.type || ''));
+    const fileIsPdf = Boolean(
+      file && ((file.type || '') === 'application/pdf' || /\.pdf$/i.test(file.name || ''))
+    );
+
     // Pièce jointe optimiste : blob local immédiat (rendu instantané) + miniature
     // compressée. L'upload réel part en arrière-plan et patche le storagePath.
     const optimisticAtts: ChatAttachment[] = file
@@ -949,9 +957,10 @@ export default function App() {
         `contexte : ${planState}`,
       ];
       if (file) {
+        const pjKind = fileIsImage ? 'vision' : fileIsPdf ? 'texte extrait' : 'classification';
         actionsDone.push(
           imagePaths.length > 0
-            ? `pièce jointe stockée (${imagePaths[0]}) et transmise en vision`
+            ? `pièce jointe stockée (${imagePaths[0]}) et transmise (${pjKind})`
             : 'pièce jointe NON stockée (visible locale uniquement)'
         );
       }
@@ -1035,8 +1044,20 @@ export default function App() {
           )
         );
       };
+      // §4 : une IMAGE doit PARTIR au LLM. Si le modèle actif ne lit pas les
+      // images, l'appel détaillé bascule sur le modèle vision du cabinet
+      // (brief, RAG et classification gardent le modèle choisi). Explicite.
+      const needsVisionSwitch = fileIsImage && imagePaths.length > 0 && !isVisionModel(modelObj.id);
+      const visualModel = needsVisionSwitch ? DEFAULT_MODEL : modelObj;
+      if (needsVisionSwitch) {
+        addToast(
+          'info',
+          'Analyse visuelle via Ling 3.0',
+          `« ${modelObj.name} » ne lit pas les images : la pièce est analysée par le modèle vision du cabinet.`
+        );
+      }
       const aiResponseContent = await generateChatResponse({
-        model: modelObj,
+        model: visualModel,
         conversationHistory: history,
         userMessage: text + ragBlock + actionsBlock,
         apiKeys,
@@ -1044,7 +1065,7 @@ export default function App() {
         agentContext: visibleContext,
         specialistContext,
         images: imagePaths,
-        hasImages: imagePaths.length > 0,
+        hasImages: imagePaths.length > 0 && fileIsImage,
         stream: true,
         onToken: appendToken,
         signal: streamCtrl.signal,
@@ -1094,8 +1115,8 @@ export default function App() {
             logAuditInteraction({
               source: 'chat',
               llm: {
-                provider: modelObj.provider,
-                modele: modelObj.name,
+                provider: visualModel.provider,
+                modele: visualModel.name,
               },
               question: `[visible=${visibleAgent.id} specialist=${targetAgent.id} task=${currentTask.taskId}] ${text}`,
               sourcesRag: ragTitles,

@@ -675,11 +675,16 @@ async function handleInboundMessage(wa, { wamid, from, type, msg }) {
   if (hasMedia) await say(waConv.PRESENCE.lookingDoc);
   else await say(waConv.PRESENCE.looking);
 
-  // Classification (texte / image / audio).
+  // Classification (texte / image / audio). Le binaire média est CONSERVÉ
+  // (waMediaBuf + waMediaMime) pour être transmis AU LLM en vision (§4) —
+  // jamais jeté après la seule classification.
   let docType = 'general_query';
   let extractedText = textBody;
   let entities = {};
   let confidence = 0.6;
+  let waMediaBuf = null;
+  let waMediaMime = '';
+  let waMediaName = '';
   try {
     if (type === 'audio' && msg.audio && msg.audio.id) {
       const buf = await withTimeout(wa.downloadMedia(msg.audio.id), 20000, 'media_timeout');
@@ -688,9 +693,38 @@ async function handleInboundMessage(wa, { wamid, from, type, msg }) {
     } else if ((type === 'image' || type === 'document') && (msg.image || msg.document)) {
       const mediaId = (msg.image && msg.image.id) || (msg.document && msg.document.id);
       const caption = (msg.image && msg.image.caption) || (msg.document && msg.document.caption) || textBody;
+      const declaredMime = (msg.image && msg.image.mime_type) || (msg.document && msg.document.mime_type) || '';
+      waMediaName = (msg.document && msg.document.filename) || (type === 'image' ? 'photo WhatsApp' : 'document WhatsApp');
       const buf = await withTimeout(wa.downloadMedia(mediaId), 25000, 'media_timeout');
-      const v = await withTimeout(visionClassifyBuffer(buf, 'image/jpeg', caption), 40000, 'vlm_timeout');
-      docType = v.documentType; extractedText = v.extractedText; entities = v.entities || {}; confidence = v.confidence;
+      // MIME RÉEL par magic bytes (le déclaré Meta n'est pas fiable).
+      waMediaMime = sniffMime(buf, declaredMime || (type === 'image' ? 'image/jpeg' : 'application/octet-stream'));
+      if (/^image\//.test(waMediaMime)) {
+        const v = await withTimeout(visionClassifyBuffer(buf, waMediaMime, caption), 40000, 'vlm_timeout');
+        docType = v.documentType; extractedText = v.extractedText; entities = v.entities || {}; confidence = v.confidence;
+        // Conservé pour vision directe du compositeur (≤ 6 Mo, sinon classification seule).
+        if (buf.length <= 6_000_000) waMediaBuf = buf;
+        else console.warn('[WA] image trop lourde pour vision directe, classification seule', buf.length);
+      } else if (waMediaMime === 'application/pdf' || /\.pdf$/i.test(waMediaName)) {
+        // PDF : extraction TEXTE réelle (pdf-parse), jamais en vision (binaire illisible).
+        const ext = await extractIndexableText(buf, 'application/pdf', waMediaName).catch((e) => ({
+          text: '', reason: String((e && e.message) || e).slice(0, 120),
+        }));
+        if (ext.text && ext.text.trim().length >= 20) {
+          extractedText = `${caption ? caption + '\n' : ''}[Pièce PDF « ${waMediaName} » :\n${ext.text.slice(0, 6000)}]`;
+          entities = {};
+          // Typage par mots-clés sur le contenu EXTRAIT (pas le nom de fichier).
+          const low = ext.text.toLowerCase();
+          if (/\b(facture|achat|fournisseur|ttc|tva|montant)\b/.test(low)) { docType = 'invoice'; confidence = 0.75; }
+          else if (/\b(impot|dgi|declaration|patente|fiscal|tva)\b/.test(low)) { docType = 'tax_notice'; confidence = 0.75; }
+          else if (/\b(releve|banque|virement|rapprochement|solde)\b/.test(low)) { docType = 'bank_statement'; confidence = 0.75; }
+          else if (/\b(contrat|bail|litige|tribunal|convention)\b/.test(low)) { docType = 'legal_contract'; confidence = 0.75; }
+          else { docType = 'general_query'; confidence = 0.7; }
+        } else {
+          console.warn('[WA] PDF sans texte extractible', waMediaName.slice(0, 80), (ext.reason || '').slice(0, 120));
+        }
+      } else {
+        console.warn('[WA] média non supporté', waMediaMime.slice(0, 60), waMediaName.slice(0, 80));
+      }
     } else if (extractedText) {
       const reply = await withTimeout(openRouterChat({
         model: 'inclusionai/ling-3.0-flash-vl:free',
@@ -925,10 +959,24 @@ async function handleInboundMessage(wa, { wamid, from, type, msg }) {
   const comptaJsonInstruction = route.agent === 'compta'
     ? ' Si la demande porte sur une écriture comptable, termine ta réponse par un bloc ```json {"typePiece":"...","tiers":"...","date":"AAAA-MM-JJ","reference":"...","montantHT":0,"montantTVA":0,"montantTTC":0,"journal":"ACH","ecriture":[{"compte":"...","intitule":"...","debit":0,"credit":0}],"mentions":{"rccm":"...","date":"...","reference":"...","tiers":"..."}} pour contrôle automatique.'
     : '';
+  // §4 : l'image REÇUE est transmise AU LLM en vision (jamais jetée après la
+  // seule classification). Fallback sans vision : texte extrait seul.
+  // Note basse confiance (< 60 % sans contenu exploitable) : le LLM doit demander
+  // un renvoi en meilleur format au lieu de bloquer (§4.3).
+  const waVisionNote = (hasMedia && !waMediaBuf && !String(extractedText).trim())
+    ? ' La pièce jointe n’a pas pu être lue automatiquement : demande au client de la renvoyer en meilleur format (photo nette) ou de saisir les informations manuellement, sans bloquer.'
+    : '';
+  const waUserText = `${isCorrection ? 'CORRECTION (remplace ma demande précédente) — ' : ''}Message client (${docType}, confiance ${confidence}) : ${extractedText.slice(0, 2500)}${entities && entities.amount ? ` [montant détecté : ${entities.amount}]` : ''}`;
   const composeMessages = [
-    { role: 'system', content: `${waConv.PERSONA_SYSTEM} Contexte dossier : entreprise=${companyLabel || 'non identifiée'}, domaine=${route.domain}. ${dossierContext || 'Premier contact.'}${correctionNote} Actions réellement effectuées : ${actionsReelles.join(' → ') || 'AUCUNE — ne prétends à aucune vérification'}. Données outils : ${toolContext.slice(0, 4000) || 'aucune'}. Tu restes l’Agent d’Accueil : transmets le résultat, sans changer de rôle. Si les données sont insuffisantes, dis ce qu’il te manque au lieu d’inventer.${comptaJsonInstruction}` },
-    { role: 'user', content: `${isCorrection ? 'CORRECTION (remplace ma demande précédente) — ' : ''}Message client (${docType}, confiance ${confidence}) : ${extractedText.slice(0, 2500)}${entities && entities.amount ? ` [montant détecté : ${entities.amount}]` : ''}` },
+    { role: 'system', content: `${waConv.PERSONA_SYSTEM} Contexte dossier : entreprise=${companyLabel || 'non identifiée'}, domaine=${route.domain}. ${dossierContext || 'Premier contact.'}${correctionNote} Actions réellement effectuées : ${actionsReelles.join(' → ') || 'AUCUNE — ne prétends à aucune vérification'}. Données outils : ${toolContext.slice(0, 4000) || 'aucune'}. Tu restes l’Agent d’Accueil : transmets le résultat, sans changer de rôle. Si les données sont insuffisantes, dis ce qu’il te manque au lieu d’inventer.${comptaJsonInstruction}${waMediaBuf ? ' Une IMAGE est jointe au message client (vision) : analyse son contenu visuel en priorité.' : ''}${waVisionNote}` },
+    waMediaBuf
+      ? { role: 'user', content: [{ type: 'text', text: waUserText }, { type: 'image_url', image_url: { url: `data:${waMediaMime};base64,${waMediaBuf.toString('base64')}` } }] }
+      : { role: 'user', content: waUserText },
   ];
+  if (waMediaBuf) {
+    actionsReelles.push('pièce image transmise en vision au LLM');
+    console.log(`[WA STEP] wamid=${wamid} étape=vision_inline octets=${waMediaBuf.length} mime=${waMediaMime}`);
+  }
   // Fallback d'attente : si la composition dépasse 10 s, on prévient le client
   // au lieu de le laisser sans nouvelles (puis on complète dès que c'est prêt).
   let answer = '';
@@ -953,8 +1001,12 @@ async function handleInboundMessage(wa, { wamid, from, type, msg }) {
     } catch (e1) {
       console.warn('[WA] composition repli 2e modèle', String((e1 && e1.message) || e1).slice(0, 150));
       await say(waConv.PRESENCE.oneMoreCheck); // RÉEL : on relance vraiment une composition
+      // Le modèle de repli n'est pas forcément vision : on lui envoie le TEXTE seul.
+      const composeFallback = composeMessages.map((m) => (typeof m.content === 'string'
+        ? m
+        : { role: m.role, content: waUserText }));
       answer = await withTimeout(openRouterChat({
-        model: fallbackModel, messages: composeMessages, temperature: 0.4, maxTokens: 2000,
+        model: fallbackModel, messages: composeFallback, temperature: 0.4, maxTokens: 2000,
       }), 22000, 'compose_timeout2');
       console.log(`[WA STEP] wamid=${wamid} étape=composition_ok modèle=${fallbackModel} len=${answer.length}`);
     }
@@ -1326,54 +1378,88 @@ async function getGoogleAccessToken(integration) {
 // Modèles capables de vision (sinon les pièces jointes sont ignorées, avec log).
 const VISION_MODEL_RX = /vl|vision|gpt-4o|claude|gemini|sonnet|opus|llama-4|qwen.*vl/i;
 
-// Résout des pièces jointes stockées (chat/...) en payloads vision OpenRouter.
-// Logs : nombre + octets UNIQUEMENT, jamais le base64.
+// Déduit le type réel d'un binaire (magic bytes) : le MIME déclaré par le client
+// n'est pas fiable (ex : photo renommée, PDF envoyé comme image). Utilisé par
+// le chat ET le pipeline WhatsApp.
+function sniffMime(buf, fallback) {
+  const fb = String(fallback || 'application/octet-stream');
+  if (!buf || buf.length < 4) return fb;
+  if (buf[0] === 0x89 && buf[1] === 0x50) return 'image/png';
+  if (buf[0] === 0xff && buf[1] === 0xd8) return 'image/jpeg';
+  if (buf[0] === 0x52 && buf[1] === 0x49 && buf[8] === 0x57 && buf[9] === 0x45) return 'image/webp';
+  if (buf[0] === 0x47 && buf[1] === 0x49) return 'image/gif';
+  if (buf[0] === 0x25 && buf[1] === 0x50 && buf[2] === 0x44 && buf[3] === 0x46) return 'application/pdf';
+  return fb;
+}
+
+// Lit un binaire stocké (chat/...) : bucket puis repli mémoire (dev).
+async function readStoredAttachment(path) {
+  const dl = await storageBucket().file(path).download().catch(() => null);
+  if (dl && dl[0] && dl[0].length) return { buf: dl[0], fromBucket: true };
+  const mem = (memoryStore.chat_uploads || {})[path];
+  if (mem && mem.base64) return { buf: Buffer.from(mem.base64, 'base64'), mimeType: mem.mimeType, fromBucket: false };
+  return { buf: null };
+}
+
+// Résout des pièces jointes stockées (chat/...) pour le LLM :
+// - images → payloads vision OpenRouter (gate modèle vision côté appelant) ;
+// - PDF → TEXTE extrait (pdf-parse) injecté dans le message (les modèles vision
+//   ne lisent pas les PDF binaires) ;
+// - autres → ignorés (log).
+// Logs : nombre + octets UNIQUEMENT, jamais le base64. Retourne { images, docTexts }.
 async function resolveChatImages(imagePaths) {
-  if (!Array.isArray(imagePaths) || !imagePaths.length) return [];
-  const out = [];
-  for (const p of imagePaths.slice(0, 2)) {
+  if (!Array.isArray(imagePaths) || !imagePaths.length) return { images: [], docTexts: [] };
+  const images = [];
+  const docTexts = [];
+  for (const p of imagePaths.slice(0, 3)) {
     const path = str(p, 220);
     if (!path || !path.startsWith('chat/') || path.includes('..')) continue;
     try {
-      let buf = null;
-      let mime = 'image/jpeg';
-      try {
-        const dl = await storageBucket().file(path).download();
-        buf = dl[0];
-      } catch {
-        const mem = (memoryStore.chat_uploads || {})[path];
-        if (!mem) continue;
-        buf = Buffer.from(mem.base64, 'base64');
-        mime = mem.mimeType || mime;
-      }
+      const { buf, mimeType } = await readStoredAttachment(path);
       if (!buf || !buf.length || buf.length > 8_000_000) continue;
-      if (!/^image\//.test(mime)) {
-        // Déduit le MIME du contenu stocké si possible (magic bytes PNG/JPEG/WEBP/GIF/PDF).
-        if (buf[0] === 0x89 && buf[1] === 0x50) mime = 'image/png';
-        else if (buf[0] === 0xff && buf[1] === 0xd8) mime = 'image/jpeg';
-        else if (buf[0] === 0x52 && buf[1] === 0x49) mime = 'image/webp';
-        else if (buf[0] === 0x47 && buf[1] === 0x49) mime = 'image/gif';
-        else continue;
+      const name = path.split('/').pop() || 'pièce jointe';
+      const mime = sniffMime(buf, mimeType || 'application/octet-stream');
+      if (/^image\//.test(mime)) {
+        images.push({ mimeType: mime, base64: buf.toString('base64'), bytes: buf.length });
+      } else if (mime === 'application/pdf' || /\.pdf$/i.test(name)) {
+        try {
+          const ext = await extractIndexableText(buf, 'application/pdf', name);
+          if (ext.text && ext.text.trim().length >= 20) {
+            docTexts.push({ name, text: ext.text.slice(0, 6000) });
+          } else {
+            console.warn('[API CHAT] PDF sans texte extractible', name.slice(0, 80), (ext.reason || '').slice(0, 120));
+          }
+        } catch (e) {
+          console.warn('[API CHAT] extraction PDF impossible', name.slice(0, 80), String((e && e.message) || e).slice(0, 120));
+        }
       }
-      out.push({ mimeType: mime, base64: buf.toString('base64'), bytes: buf.length });
+      // Autres types : classification/texte uniquement, jamais au LLM.
     } catch (e) {
       console.warn('[API CHAT] pièce illisible', path.slice(0, 80), String((e && e.message) || e).slice(0, 120));
     }
   }
-  return out;
+  return { images, docTexts };
 }
 
-// Injecte les images dans le DERNIER message user (format OpenRouter vision).
-function injectImagesIntoMessages(messages, images) {
-  if (!images.length) return messages;
+// Injecte les pièces dans le DERNIER message user : images en vision OpenRouter,
+// textes extraits des PDF en texte (préfixés, bornés). Sans pièce → inchangé.
+function injectImagesIntoMessages(messages, resolved) {
+  const images = (resolved && resolved.images) || [];
+  const docTexts = (resolved && resolved.docTexts) || [];
+  if (!images.length && !docTexts.length) return messages;
   const copy = messages.map((m) => ({ ...m }));
   for (let i = copy.length - 1; i >= 0; i--) {
     if (copy[i] && copy[i].role === 'user') {
-      const text = typeof copy[i].content === 'string' ? copy[i].content : '';
-      copy[i].content = [{ type: 'text', text }, ...images.map((im) => ({
-        type: 'image_url',
-        image_url: { url: `data:${im.mimeType};base64,${im.base64}` },
-      }))];
+      let text = typeof copy[i].content === 'string' ? copy[i].content : '';
+      for (const d of docTexts) {
+        text += `\n\n[Contenu extrait de la pièce jointe PDF « ${d.name} » :\n${d.text}\n— fin de l'extrait. Analyse ce contenu comme la pièce fournie par l'utilisateur.]`;
+      }
+      copy[i].content = images.length
+        ? [{ type: 'text', text }, ...images.map((im) => ({
+          type: 'image_url',
+          image_url: { url: `data:${im.mimeType};base64,${im.base64}` },
+        }))]
+        : text;
       break;
     }
   }
@@ -1399,20 +1485,25 @@ app.post(['/api/chat', '/chat'], async (req, res) => {
   if (!Array.isArray(messages) || messages.length === 0 || messages.length > 20) {
     return res.status(400).json({ error: 'messages[] requis (1..20)' });
   }
-  // Pièces jointes vision : résolues côté serveur, jamais d'URL signée.
-  let images = [];
-  if (Array.isArray(imagePaths) && imagePaths.length) {
+  // Pièces jointes : `attachmentPaths` (nouveau, images + PDF) ou `imagePaths`
+  // (alias historique). Images → vision (si modèle compatible), PDF → texte
+  // extrait injecté. Résolues côté serveur, jamais d'URL signée.
+  const attPaths = Array.isArray((req.body || {}).attachmentPaths) && (req.body || {}).attachmentPaths.length
+    ? (req.body || {}).attachmentPaths
+    : imagePaths;
+  let resolved = { images: [], docTexts: [] };
+  if (Array.isArray(attPaths) && attPaths.length) {
     if (!VISION_MODEL_RX.test(model)) {
-      console.warn(`[API CHAT] modèle sans vision (${String(model).slice(0, 60)}) : ${imagePaths.length} pièce(s) ignorée(s)`);
-    } else {
-      images = await resolveChatImages(imagePaths);
-      console.log(`[API CHAT] vision model=${String(model).slice(0, 60)} images=${images.length} octets=${images.reduce((n, im) => n + im.bytes, 0)}`);
-      if (imagePaths.length && !images.length) {
-        console.warn('[API CHAT] aucune pièce exploitable (introuvable ou non-image)');
-      }
+      console.warn(`[API CHAT] modèle sans vision (${String(model).slice(0, 60)}) : images ignorées, PDF extraits quand même`);
+    }
+    resolved = await resolveChatImages(attPaths);
+    if (!VISION_MODEL_RX.test(model)) resolved.images = [];
+    console.log(`[API CHAT] model=${String(model).slice(0, 60)} images=${resolved.images.length} pdf_textes=${resolved.docTexts.length} octets=${resolved.images.reduce((n, im) => n + im.bytes, 0)}`);
+    if (attPaths.length && !resolved.images.length && !resolved.docTexts.length) {
+      console.warn('[API CHAT] aucune pièce exploitable (introuvable, trop lourde ou type non supporté)');
     }
   }
-  const finalMessages = injectImagesIntoMessages(messages, images);
+  const finalMessages = injectImagesIntoMessages(messages, resolved);
   // Streaming SSE token-par-token (§1.3) : le front affiche dès le 1er token.
   if (stream === true) {
     try {

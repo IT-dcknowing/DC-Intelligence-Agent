@@ -7,6 +7,13 @@ import { apiUrl, ENV_ANTHROPIC_KEY, ENV_DEEPSEEK_KEY, ENV_GROQ_KEY, ENV_OPENROUT
  */
 export const DEFAULT_MODEL_ID = 'inclusionai/ling-3.0-flash-vl:free';
 
+// Miroir de VISION_MODEL_RX (backend) : un modèle non listé ici NE reçoit PAS
+// les images (le backend les ignore avec warn) — le front doit le signaler.
+export const VISION_MODEL_RX = /vl|vision|gpt-4o|claude|gemini|sonnet|opus|llama-4|qwen.*vl/i;
+export function isVisionModel(modelId?: string): boolean {
+  return typeof modelId === 'string' && VISION_MODEL_RX.test(modelId);
+}
+
 export const DEFAULT_MODEL: LLMModel = {
   id: DEFAULT_MODEL_ID,
   name: 'Ling 3.0 Flash VL',
@@ -464,7 +471,7 @@ async function callBackendChat(
         messages,
         temperature: 0.3,
         max_tokens: opts?.maxTokens || 3500,
-        ...(opts?.images?.length ? { imagePaths: opts.images } : {}),
+        ...(opts?.images?.length ? { attachmentPaths: opts.images } : {}),
       }),
     });
   } catch (e: any) {
@@ -523,7 +530,7 @@ async function streamBackendChat(
         temperature: 0.3,
         max_tokens: opts.maxTokens || 3500,
         stream: true,
-        ...(opts.images?.length ? { imagePaths: opts.images } : {}),
+        ...(opts.images?.length ? { attachmentPaths: opts.images } : {}),
       }),
     });
   } catch (e: any) {
