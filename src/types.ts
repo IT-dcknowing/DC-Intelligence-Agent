@@ -74,6 +74,21 @@ export interface TaskObject {
   updatedAt: string;
 }
 
+export interface ChatAttachment {
+  name: string;
+  mimeType: string;
+  size: number;
+  // Stockage backend (Firebase Storage via /api/chat/upload) : persistant, multi-appareil.
+  storagePath?: string;
+  // URL locale (blob:) ou distante (data:) : affichage immédiat, non persistée.
+  url?: string;
+  // Miniature compressée (dataURL jpeg) : aperçu rapide + survit au reload.
+  thumbUrl?: string;
+  // État d'upload côté client.
+  uploading?: boolean;
+  uploadError?: boolean;
+}
+
 export interface ChatMessage {
   id: string;
   sender: 'user' | 'agent' | 'system';
@@ -84,6 +99,7 @@ export interface ChatMessage {
   validationResult?: ValidationResult;
   multimodalResult?: MultimodalResult;
   taskRef?: TaskObject;
+  attachments?: ChatAttachment[];
 }
 
 export interface ChatSession {
@@ -96,6 +112,11 @@ export interface ChatSession {
   modelId?: string;
   createdAt: string;
   activeAgentId?: string;
+  // Regroupement type Claude : timestamps bruts (ms) pour AUJOURD'HUI / HIER / 7 JOURS / PLUS ANCIEN.
+  createdAtMs?: number;
+  updatedAtMs?: number;
+  // Épinglage : les épinglés remontent en tête, devant AUJOURD'HUI.
+  pinned?: boolean;
 }
 
 export interface WorkspaceIntegration {

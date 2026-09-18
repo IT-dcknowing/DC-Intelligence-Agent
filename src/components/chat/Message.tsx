@@ -4,7 +4,7 @@ import remarkGfm from 'remark-gfm';
 import { Copy, CheckCheck } from 'lucide-react';
 
 /**
- * Message — Claude.ai editorial style, Noir & Blanc
+ * Message — Editorial.ai editorial style, Noir & Blanc
  * - IA : pleine largeur, pas de bulle, avatar DC + texte Lora sur blanc
  * - User : bulle #171717 alignée à droite, max 70%, Inter 15px
  * - Markdown rendu via react-markdown + remark-gfm (jamais de syntaxe brute)
@@ -87,7 +87,7 @@ export const Message: React.FC<MessageProps> = ({ role, content, timestamp, send
         {meta && <div className="mb-3">{meta}</div>}
 
         {/* Corps Markdown — Lora 16px / 1.65, jamais de syntaxe brute */}
-        <div className="claude-prose">
+        <div className="dc-prose">
           <ReactMarkdown
             remarkPlugins={[remarkGfm]}
             components={{

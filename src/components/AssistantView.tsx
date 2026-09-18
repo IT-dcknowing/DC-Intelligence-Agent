@@ -1,29 +1,27 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { createTask } from '../services/taskEngine';
 import {
-  Plus,
   Mic,
   ArrowUp,
-  Search,
-  Trash2,
-  Edit2,
   Sparkles,
   Paperclip,
   Check,
   X,
   FileSpreadsheet,
   Download,
-  Bot,
   Copy,
   CheckCheck,
   FileText,
+  File as FileIcon,
   HelpCircle,
   Calculator,
   BookOpen,
   Loader2,
+  Maximize2,
 } from 'lucide-react';
 import {
   ApiKeyConfig,
+  ChatAttachment,
   ChatMessage,
   ChatSession,
   LLMModel,
@@ -33,20 +31,244 @@ import {
 import { ModelSelector } from './ModelSelector';
 import { WaveformVisualizer } from './WaveformVisualizer';
 import { transcribeAudioWithGroq } from '../services/voiceService';
+import { fetchChatAttachment, chatAttachmentDataUrl } from '../services/storeApi';
+import { attachmentKind } from '../services/imageUtils';
 import { executeSoftwareTool } from '../services/mcpClient';
 import { logMcpCall } from '../services/auditLog';
 import { getAccountingContext } from '../services/companyContextService';
-import { InputArea as ClaudeInputArea } from './claude/InputArea';
+import { InputArea as ChatInputArea } from './chat/InputArea';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+
+/**
+ * Pièce jointe rendue selon le type MIME réel (image / pdf / fichier).
+ * Source : blob local immédiat > miniature > fetch backend (Storage via base64).
+ * Jamais le nom brut entre crochets : image => <img> cliquable (lightbox),
+ * PDF => carte cliquable (nouvel onglet), autre => carte fichier générique.
+ */
+const MessageAttachment: React.FC<{
+  att: ChatAttachment;
+  dark?: boolean;
+  onZoom?: (src: string) => void;
+}> = ({ att, dark, onZoom }) => {
+  const kind = attachmentKind(att.mimeType);
+  const [src, setSrc] = useState<string | null>(att.url || null);
+  const [triedRemote, setTriedRemote] = useState(false);
+  const [loadingRemote, setLoadingRemote] = useState(false);
+  const [opening, setOpening] = useState(false);
+  const [failed, setFailed] = useState(false);
+
+  const loadRemote = () => {
+    if (!att.storagePath || triedRemote) return;
+    setTriedRemote(true);
+    setLoadingRemote(true);
+    fetchChatAttachment(att.storagePath)
+      .then((r) => setSrc(chatAttachmentDataUrl(r.base64, r.mimeType)))
+      .catch(() => {
+        if (att.thumbUrl) setSrc(att.thumbUrl);
+        else setFailed(true);
+      })
+      .finally(() => setLoadingRemote(false));
+  };
+
+  useEffect(() => {
+    if (!src && !triedRemote) {
+      if (att.storagePath) loadRemote();
+      else if (att.thumbUrl) setSrc(att.thumbUrl);
+      else setFailed(true);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [src]);
+
+  const handleImgError = () => {
+    // Blob mort (reload) ou URL invalide -> repli distant puis miniature.
+    if (att.storagePath && !triedRemote) {
+      loadRemote();
+    } else if (att.thumbUrl && src !== att.thumbUrl) {
+      setSrc(att.thumbUrl);
+    } else {
+      setFailed(true);
+    }
+  };
+
+  const openFull = () => {
+    const direct = src && !src.startsWith('blob:') ? src : att.url && !failed ? att.url : null;
+    if (direct) {
+      window.open(direct, '_blank', 'noopener');
+      return;
+    }
+    if (att.storagePath && !opening) {
+      setOpening(true);
+      fetchChatAttachment(att.storagePath)
+        .then((r) => window.open(chatAttachmentDataUrl(r.base64, r.mimeType), '_blank', 'noopener'))
+        .catch(() => {})
+        .finally(() => setOpening(false));
+    }
+  };
+
+  const sizeLabel = (() => {
+    const n = att.size || 0;
+    if (n < 1024) return `${n} B`;
+    if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+    return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+  })();
+
+  if (failed) {
+    return (
+      <div
+        className="flex items-center gap-2 px-3 py-2 rounded-xl text-[12px]"
+        style={dark ? { background: 'rgba(255,255,255,0.08)', color: '#E5E7EB' } : { background: '#F4F4F5', color: '#52525B' }}
+      >
+        <FileIcon style={{ width: 16, height: 16 }} />
+        <span className="truncate max-w-[180px]" title={att.name}>{att.name}</span>
+        <span style={{ opacity: 0.6 }}>· {sizeLabel}</span>
+      </div>
+    );
+  }
+
+  if (kind === 'image') {
+    return (
+      <div className="relative">
+        {!src || loadingRemote ? (
+          <div
+            className="flex items-center justify-center rounded-xl"
+            style={{
+              width: 220,
+              height: 140,
+              background: dark ? 'rgba(255,255,255,0.08)' : '#F4F4F5',
+              filter: att.uploading ? 'blur(2px)' : 'none',
+            }}
+          >
+            <Loader2 className="w-5 h-5 animate-spin" style={{ color: dark ? '#fff' : '#52525B' }} />
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={() => src && onZoom?.(src)}
+            title="Agrandir l’image"
+            className="block p-0 border-0 bg-transparent cursor-zoom-in"
+            style={{ maxWidth: 300 }}
+          >
+            <img
+              src={src}
+              alt={att.name}
+              onError={handleImgError}
+              className="rounded-xl object-cover"
+              style={{
+                maxWidth: 300,
+                maxHeight: 220,
+                width: 'auto',
+                height: 'auto',
+                display: 'block',
+                border: dark ? '1px solid rgba(255,255,255,0.25)' : '1px solid #E5E7EB',
+                filter: att.uploading ? 'blur(2px)' : 'none',
+              }}
+            />
+            <span
+              className="absolute bottom-1.5 right-1.5 p-1 rounded-md"
+              style={{ background: 'rgba(0,0,0,0.55)', color: '#fff' }}
+            >
+              <Maximize2 style={{ width: 12, height: 12 }} />
+            </span>
+          </button>
+        )}
+        {att.uploading && (
+          <span
+            className="absolute top-1.5 left-1.5 px-2 py-0.5 rounded-full text-[10px] font-semibold flex items-center gap-1"
+            style={{ background: 'rgba(0,0,0,0.55)', color: '#fff' }}
+          >
+            <Loader2 className="w-3 h-3 animate-spin" />
+            Envoi…
+          </span>
+        )}
+        <div
+          className="truncate mt-1 px-0.5"
+          title={att.name}
+          style={{ fontSize: '11px', maxWidth: 300, color: dark ? 'rgba(255,255,255,0.65)' : '#9CA3AF' }}
+        >
+          {att.name}
+          {att.uploadError ? ' · visible uniquement sur cet appareil' : ''}
+        </div>
+      </div>
+    );
+  }
+
+  // PDF / fichier générique : carte cliquable (icône + nom + taille), jamais de [nom] brut.
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={openFull}
+        title={kind === 'pdf' ? 'Ouvrir le PDF' : 'Ouvrir le fichier'}
+        className="flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-left transition-opacity hover:opacity-90"
+        style={
+          dark
+            ? { background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.2)', color: '#fff', maxWidth: 300 }
+            : { background: '#F9FAFB', border: '1px solid #E5E7EB', color: '#1F2937', maxWidth: 300 }
+        }
+      >
+        <FileText style={{ width: 22, height: 22, flexShrink: 0 }} />
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-[12px] font-semibold" title={att.name}>{att.name}</span>
+          <span className="block text-[11px]" style={{ opacity: 0.65 }}>
+            {kind === 'pdf' ? 'PDF' : 'Fichier'} · {sizeLabel}
+            {att.uploading ? ' · Envoi…' : ''}
+          </span>
+        </span>
+        {att.uploading || opening ? (
+          <Loader2 className="w-4 h-4 animate-spin shrink-0" />
+        ) : (
+          <Download style={{ width: 14, height: 14, flexShrink: 0, opacity: 0.7 }} />
+        )}
+      </button>
+    </div>
+  );
+};
+
+/** Vignette du composer avant envoi : miniature image ou icône selon MIME. */
+const ComposerFileThumb: React.FC<{ file: File; onRemove: () => void }> = ({ file, onRemove }) => {
+  const isImg = (file.type || '').startsWith('image/');
+  const objectUrl = React.useMemo(() => (isImg ? URL.createObjectURL(file) : null), [file, isImg]);
+  useEffect(() => () => {
+    if (objectUrl) URL.revokeObjectURL(objectUrl);
+  }, [objectUrl]);
+  const sizeLabel = file.size < 1024 * 1024 ? `${(file.size / 1024).toFixed(1)} KB` : `${(file.size / (1024 * 1024)).toFixed(1)} MB`;
+  return (
+    <div
+      className="relative flex items-center gap-2 pl-1.5 pr-2 py-1.5 bg-white border border-[#E2E8F0] rounded-xl shadow-xs text-[12px] max-w-[240px]"
+    >
+      {isImg && objectUrl ? (
+        <img src={objectUrl} alt={file.name} className="w-12 h-12 rounded-lg object-cover shrink-0" style={{ border: '1px solid #E5E7EB' }} />
+      ) : (
+        <span className="w-12 h-12 rounded-lg flex items-center justify-center shrink-0" style={{ background: '#F4F4F5', border: '1px solid #E5E7EB' }}>
+          <FileText style={{ width: 20, height: 20, color: '#52525B' }} />
+        </span>
+      )}
+      <div className="min-w-0 flex-1">
+        <div className="font-medium text-[#1E293B] truncate" title={file.name}>
+          {file.name}
+        </div>
+        <div className="text-[10px] text-[#94A3B8]">{sizeLabel}</div>
+      </div>
+      <button
+        type="button"
+        onClick={onRemove}
+        className="p-1 rounded-md hover:bg-[#F3F4F6] text-[#94A3B8] hover:text-[#111827] shrink-0"
+        title="Retirer"
+      >
+        <X className="w-3 h-3" />
+      </button>
+    </div>
+  );
+};
 
 interface AssistantViewProps {
   sessions: ChatSession[];
   selectedSessionId: string | null;
-  onSelectSession: (sessionId: string) => void;
-  onNewSession: () => Promise<string>;
-  onDeleteSession: (sessionId: string) => void;
-  onRenameSession: (sessionId: string, newTitle: string) => void;
+  onSelectSession?: (sessionId: string) => void;
+  onNewSession?: () => Promise<string>;
+  onDeleteSession?: (sessionId: string) => void;
+  onRenameSession?: (sessionId: string, newTitle: string) => void;
   onSendMessage: (sessionId: string, text: string, file?: File) => void;
   isGenerating: boolean;
   models: LLMModel[];
@@ -85,11 +307,18 @@ export const AssistantView: React.FC<AssistantViewProps> = ({
   isRefreshingModels = false,
   onDeleteCustomModel,
 }) => {
-  const [searchQuery, setSearchQuery] = useState('');
   const [inputText, setInputText] = useState('');
-  const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
-  const [editingTitle, setEditingTitle] = useState('');
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
+  const [lightbox, setLightbox] = useState<{ src: string; name: string } | null>(null);
+
+  useEffect(() => {
+    if (!lightbox) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setLightbox(null);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [lightbox]);
   const [exportNotice, setExportNotice] = useState(false);
   const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
   const [isDragOver, setIsDragOver] = useState(false);
@@ -248,6 +477,7 @@ export const AssistantView: React.FC<AssistantViewProps> = ({
     if ((!hasText && !hasFiles) || isGenerating) return;
     let sessionId = activeSession?.id;
     if (!sessionId) {
+      if (!onNewSession) return;
       try {
         sessionId = await onNewSession();
       } catch {
@@ -295,13 +525,6 @@ export const AssistantView: React.FC<AssistantViewProps> = ({
   };
 
   const MAX_FILE_SIZE = 8 * 1024 * 1024;
-  const ALLOWED_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/jpg', 'application/pdf', 'text/plain', 'text/csv', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'application/msword', 'application/vnd.ms-excel', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'];
-
-  const formatFileSize = (bytes: number) => {
-    if (bytes < 1024) return `${bytes} B`;
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  };
 
   const handleFiles = (files: FileList | File[]) => {
     const fileArray = Array.from(files);
@@ -351,15 +574,6 @@ export const AssistantView: React.FC<AssistantViewProps> = ({
   const removeAttachedFile = (index: number) => {
     setAttachedFiles((prev) => prev.filter((_, i) => i !== index));
     setFileError(null);
-  };
-
-  const getFileIcon = (fileName: string) => {
-    const ext = fileName.split('.').pop()?.toLowerCase();
-    if (['jpg', 'jpeg', 'png', 'webp'].includes(ext || '')) return '🖼️';
-    if (ext === 'pdf') return '📄';
-    if (['doc', 'docx'].includes(ext || '')) return '📝';
-    if (['xls', 'xlsx', 'csv'].includes(ext || '')) return '📊';
-    return '📎';
   };
 
   const copyToClipboard = (text: string, id: string) => {
@@ -471,30 +685,6 @@ export const AssistantView: React.FC<AssistantViewProps> = ({
     }
   };
 
-  const filteredSessions = sessions.filter((s) => {
-    const q = searchQuery.toLowerCase().trim();
-    if (!q) return true;
-    return (
-      s.title.toLowerCase().includes(q) ||
-      s.lastMessage.toLowerCase().includes(q) ||
-      (s.category && s.category.toLowerCase().includes(q))
-    );
-  });
-
-  const startRenaming = (session: ChatSession, e: React.MouseEvent) => {
-    e.stopPropagation();
-    setEditingSessionId(session.id);
-    setEditingTitle(session.title);
-  };
-
-  const saveRenaming = (sessionId: string, e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    if (editingTitle.trim()) {
-      onRenameSession(sessionId, editingTitle.trim());
-    }
-    setEditingSessionId(null);
-  };
-
   const quickPrompts = [
     {
       title: 'Facture d’achat avec TVA 18%',
@@ -520,177 +710,7 @@ export const AssistantView: React.FC<AssistantViewProps> = ({
 
   return (
     <div className="flex-1 flex h-full min-w-0 overflow-hidden bg-white">
-      {/* ==================================================================== */}
-      {/* COLONNE CENTRALE : HISTORIQUE DE TES PROPRES SESSIONS DE CHAT        */}
-      {/* ==================================================================== */}
-      <aside
-        id="assistant-sessions-sidebar"
-        className="w-[270px] md:w-[280px] h-full border-r flex flex-col shrink-0 select-none z-10"
-        style={{ background: '#FAFAFA', borderColor: '#E8E8E6' }}
-      >
-        {/* Header : Title + New Session Button */}
-        <div className="p-3 border-b bg-white space-y-3" style={{ borderColor: '#E8E8E6' }}>
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <div className="w-7 h-7 rounded-lg bg-black text-white flex items-center justify-center font-bold text-xs shadow-xs">
-                <Bot className="w-4 h-4" />
-              </div>
-              <h2 className="text-[16px] font-bold text-[#1E293B] tracking-tight font-['Montserrat']">
-                Sessions Assistant
-              </h2>
-            </div>
-
-            <button
-              type="button"
-              id="new-chat-session-btn"
-              onClick={onNewSession}
-              title="Nouvelle session de chat"
-              className="px-2.5 py-1.5 rounded-lg bg-black hover:bg-zinc-800 text-white text-[12px] font-semibold flex items-center gap-1.5 transition-all shadow-xs active:scale-95"
-            >
-              <Plus className="w-3.5 h-3.5" />
-              <span>Nouveau</span>
-            </button>
-          </div>
-
-          {/* Search bar — subtile, sans bordure lourde */}
-          <div className="relative">
-            <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2" style={{ color: '#9CA3AF' }} />
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Rechercher..."
-              className="w-full pl-8 pr-3 py-1.5 bg-white border rounded-md text-[13px] placeholder:text-[#9CA3AF] focus:outline-none transition-colors"
-              style={{ borderColor: '#E8E8E6', color: '#1F1F1E', fontFamily: "'Inter', sans-serif" }}
-              onFocus={(e) => ((e.currentTarget as HTMLElement).style.borderColor = '#6B6B6B')}
-              onBlur={(e) => ((e.currentTarget as HTMLElement).style.borderColor = '#E8E8E6')}
-            />
-          </div>
-        </div>
-
-        {/* Sessions List */}
-        <div id="sessions-list-scroll" className="flex-1 overflow-y-auto p-2 space-y-1">
-          {filteredSessions.length === 0 ? (
-            <div className="p-6 text-center text-[#94A3B8] text-[12px] mt-6">
-              <Bot className="w-8 h-8 mx-auto stroke-[1.5] text-[#CBD5E1] mb-2" />
-              <p className="font-medium text-[#475569]">Aucune session trouvée</p>
-              <p className="text-[11px] text-[#94A3B8] mt-0.5">
-                Cliquez sur "Nouveau" pour démarrer un chat.
-              </p>
-            </div>
-          ) : (
-            filteredSessions.map((session) => {
-              const isSelected = activeSession?.id === session.id;
-              const isEditing = editingSessionId === session.id;
-
-              return (
-                <div
-                  key={session.id}
-                  id={`session-item-${session.id}`}
-                  onClick={() => onSelectSession(session.id)}
-                  className="group relative p-2.5 rounded-md cursor-pointer"
-                  style={{
-                    background: isSelected ? '#EBEBE9' : 'transparent',
-                    border: 'none',
-                    transition: 'all 0.15s ease',
-                  }}
-                  onMouseEnter={(e) => {
-                    if (!isSelected) (e.currentTarget as HTMLElement).style.background = '#F0F0EE';
-                  }}
-                  onMouseLeave={(e) => {
-                    if (!isSelected) (e.currentTarget as HTMLElement).style.background = 'transparent';
-                  }}
-                >
-                  {isEditing ? (
-                    <form
-                      onSubmit={(e) => saveRenaming(session.id, e)}
-                      onClick={(e) => e.stopPropagation()}
-                      className="flex items-center gap-1.5"
-                    >
-                      <input
-                        type="text"
-                        autoFocus
-                        value={editingTitle}
-                        onChange={(e) => setEditingTitle(e.target.value)}
-                        onBlur={() => saveRenaming(session.id)}
-                        className="flex-1 px-2 py-0.5 text-[13px] font-semibold bg-white border border-black rounded focus:outline-none"
-                      />
-                      <button
-                        type="submit"
-                        className="p-1 text-black hover:bg-zinc-100 rounded"
-                      >
-                        <Check className="w-3.5 h-3.5" />
-                      </button>
-                    </form>
-                  ) : (
-                    <>
-                      <div className="flex items-center justify-between gap-1.5">
-                        <span
-                          className={`font-semibold text-[13px] truncate ${
-                            isSelected ? 'text-black' : 'text-[#1E293B]'
-                          }`}
-                        >
-                          {session.title}
-                        </span>
-
-                        <span className="text-[10px] font-mono text-[#94A3B8] shrink-0">
-                          {session.lastMessageTime}
-                        </span>
-                      </div>
-
-                      <p className="text-[11px] text-[#64748B] truncate mt-1 leading-snug">
-                        {session.lastMessage || 'Nouvelle conversation prête...'}
-                      </p>
-
-                      <div className="flex items-center justify-between mt-2 pt-1.5 border-t border-zinc-100 text-[10px]">
-                        {session.category && (
-                          <span className="px-1.5 py-0.5 rounded bg-[#F1F5F9] text-[#475569] font-medium">
-                            {session.category}
-                          </span>
-                        )}
-
-                        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity ml-auto">
-                          <button
-                            type="button"
-                            onClick={(e) => startRenaming(session, e)}
-                            title="Renommer la session"
-                            className="p-1 text-[#64748B] hover:text-black hover:bg-zinc-100 rounded"
-                          >
-                            <Edit2 className="w-3 h-3" />
-                          </button>
-                          {sessions.length > 1 && (
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                onDeleteSession(session.id);
-                              }}
-                              title="Supprimer la session"
-                              className="p-1 text-[#64748B] hover:text-red-600 hover:bg-red-50 rounded"
-                            >
-                              <Trash2 className="w-3 h-3" />
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    </>
-                  )}
-                </div>
-              );
-            })
-          )}
-        </div>
-
-        {/* Footer info */}
-        <div className="p-3 border-t border-[#E2E8F0] bg-white text-[11px] text-[#64748B] flex items-center justify-between">
-          <span className="font-medium">Studio OS Comptable</span>
-          <span className="text-[#94A3B8] font-mono">{sessions.length} sessions</span>
-        </div>
-      </aside>
-
-      {/* ==================================================================== */}
-      {/* COLONNE DROITE : LE CHAT AVEC L'IA POUR LA SESSION EN COURS          */}
-      {/* ==================================================================== */}
+      {/* Chat pleine largeur : historique deplace dans la Sidebar (style Claude) */}
       <section
         id="assistant-chat-main-column"
         className="flex-1 flex flex-col h-full bg-white relative min-w-0 overflow-hidden font-['Montserrat']"
@@ -724,6 +744,22 @@ export const AssistantView: React.FC<AssistantViewProps> = ({
               </p>
             </div>
           </div>
+
+          {/* Mobile : sélecteur de conversation (sidebar masquée sous md) */}
+          {onSelectSession && sessions.length > 0 && (
+            <select
+              value={activeSession?.id || ''}
+              onChange={(e) => e.target.value && onSelectSession(e.target.value)}
+              className="md:hidden max-w-[140px] text-[12px] font-medium px-2 py-1.5 rounded-lg border border-[#E2E8F0] bg-white text-[#1E293B] focus:outline-none focus:border-black"
+              title=" Choisir une conversation"
+            >
+              {sessions.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {(s.title || 'Session').slice(0, 28)}
+                </option>
+              ))}
+            </select>
+          )}
 
           {/* Model Selector & Actions */}
           <div className="flex items-center gap-2.5">
@@ -770,7 +806,7 @@ export const AssistantView: React.FC<AssistantViewProps> = ({
           </div>
         )}
 
-        {/* Chat Messages Scrollable Feed — Claude centered 740px, gap 32px */}
+        {/* Chat Messages Scrollable Feed — Editorial centered 740px, gap 32px */}
         <div
           id="assistant-messages-scroll"
           className="flex-1 overflow-y-auto px-6 py-8 space-y-8"
@@ -846,25 +882,32 @@ export const AssistantView: React.FC<AssistantViewProps> = ({
                           : { background: '#FFFFFF', color: '#1F1F1E', fontFamily: "'Lora', 'Georgia', serif", fontSize: '16px', lineHeight: '1.65' }
                       }
                     >
-                      {/* Multimodal Classifier & Router Badge */}
-                      {msg.multimodalResult && (
-                        <div className="mb-2 flex items-center gap-1.5 text-[10px] font-medium text-gray-500 bg-gray-100 border border-gray-200 px-2.5 py-1 rounded-full w-fit">
-                          <span className="font-bold uppercase text-black">{msg.multimodalResult.inputType}</span>
-                          <span>•</span>
-                          <span>Doc: {msg.multimodalResult.documentType}</span>
-                          <span>•</span>
-                          <span className="text-black font-semibold">Confiance {(msg.multimodalResult.confidence * 100).toFixed(0)}%</span>
+
+
+                      {/* Pièces jointes — miniature cliquable (lightbox) selon MIME */}
+                      {msg.attachments && msg.attachments.length > 0 && (
+                        <div className="flex flex-col gap-2 mb-2">
+                          {msg.attachments.map((a, i) => (
+                            <MessageAttachment
+                              key={`${msg.id}-att-${i}`}
+                              att={a}
+                              dark={isUser}
+                              onZoom={(src) => setLightbox({ src, name: a.name })}
+                            />
+                          ))}
                         </div>
                       )}
 
                       {/* Contenu — Markdown rendu (jamais de syntaxe brute) */}
-                      <div className={isUser ? 'whitespace-pre-wrap' : 'claude-prose'}>
-                        {isUser ? (
-                          <span style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{msg.content}</span>
-                        ) : (
-                          <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
-                        )}
-                      </div>
+                      {msg.content.trim() && (
+                        <div className={isUser ? 'whitespace-pre-wrap' : 'dc-prose'}>
+                          {isUser ? (
+                            <span style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{msg.content}</span>
+                          ) : (
+                            <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
+                          )}
+                        </div>
+                      )}
 
                       {/* Interactive SYSCOHADA Proposal Card & Validation Pipeline */}
                       {!isUser && msg.proposal && (
@@ -946,12 +989,12 @@ export const AssistantView: React.FC<AssistantViewProps> = ({
 
                           {/* Validation serveur Compta Flow (PREPARE -> EXECUTE, jamais simulé) */}
                           {mcpErrors[msg.id] && (
-                            <div className="mt-3 p-3 rounded-lg bg-red-50 border border-red-200 text-[12px] text-red-800 leading-relaxed">
+                            <div className="mt-3 p-3 rounded-lg bg-white border border-[#E5E7EB] text-[12px] text-[#1F2937] leading-relaxed">
                               {mcpErrors[msg.id]}
                             </div>
                           )}
                           {mcpDrafts[msg.id] && !mcpDrafts[msg.id].committed && (
-                            <div className="mt-3 p-3 rounded-lg bg-emerald-50 border border-emerald-200 text-[12px] text-emerald-900 leading-relaxed">
+                            <div className="mt-3 p-3 rounded-lg bg-[#F9FAFB] border border-[#E5E7EB] text-[12px] text-[#1F2937] leading-relaxed">
                               <div className="font-bold font-mono">draftId : {mcpDrafts[msg.id].draftId}</div>
                               {mcpDrafts[msg.id].alertes.length > 0 ? (
                                 <div className="mt-1.5 space-y-1">
@@ -1027,13 +1070,13 @@ export const AssistantView: React.FC<AssistantViewProps> = ({
                                   }
                                 }}
                                 disabled={!!mcpBusy[msg.id]}
-                                className="flex-1 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-semibold py-2 px-3 rounded-lg flex items-center justify-center gap-1.5 cursor-pointer"
+                                className="flex-1 bg-[#111827] hover:bg-[#1F2937] disabled:opacity-50 text-white text-xs font-semibold py-2 px-3 rounded-lg flex items-center justify-center gap-1.5 cursor-pointer"
                               >
                                 <Check className="w-3.5 h-3.5" />
                                 Vérifier (readback)
                               </button>
                             ) : (
-                              <span className="flex-1 text-center text-xs font-semibold text-emerald-700 py-2">
+                              <span className="flex-1 text-center text-xs font-semibold text-[#1F2937] py-2">
                                 ✓ Vérifié — référence externe confirmée
                               </span>
                             )}
@@ -1119,14 +1162,14 @@ export const AssistantView: React.FC<AssistantViewProps> = ({
                             {status === 'PROPOSED' && (
                               <div className="flex gap-2 mt-2">
                                 <button type="button" onClick={() => setProposalEdits((p) => ({ ...p, [msg.id]: !p[msg.id] }))} className="px-2 py-1 rounded bg-white border border-[#E5E5E7] text-[11px]">Modifier</button>
-                                <button type="button" onClick={() => setProposalStatuses((p) => ({ ...p, [msg.id]: 'REJECTED' }))} className="px-2 py-1 rounded bg-red-50 border border-red-200 text-[11px] text-red-700">Refuser</button>
+                                <button type="button" onClick={() => setProposalStatuses((p) => ({ ...p, [msg.id]: 'REJECTED' }))} className="px-2 py-1 rounded bg-white border border-[#E5E7EB] text-[11px] text-[#1F2937]">Refuser</button>
                                 <button type="button" onClick={() => setProposalStatuses((p) => ({ ...p, [msg.id]: 'APPROVED' }))} className="px-2 py-1 rounded bg-black text-white text-[11px]">Valider la proposition</button>
                               </div>
                             )}
                             {status === 'APPROVED' && !mcpDrafts[msg.id] && !mcpErrors[msg.id] && (
                               <div className="mt-2 text-[11px] font-semibold">Où souhaitez-vous enregistrer ? → Vérifier côté Compta Flow / Export TXT / Google Sheets</div>
                             )}
-                            {status === 'REJECTED' && <div className="mt-2 text-red-700 font-semibold">Proposition refusée.</div>}
+                            {status === 'REJECTED' && <div className="mt-2 text-[#1F2937] font-semibold">Proposition refusée.</div>}
                           </div>
                         );
                       })()}
@@ -1185,42 +1228,23 @@ export const AssistantView: React.FC<AssistantViewProps> = ({
               <button
                 type="button"
                 onClick={() => setAttachedFiles([])}
-                className="text-[11px] text-[#94A3B8] hover:text-red-600 font-medium"
+                className="text-[11px] text-[#94A3B8] hover:text-[#111827] font-medium"
               >
                 Tout retirer
               </button>
             </div>
             <div className="flex flex-wrap gap-2">
               {attachedFiles.map((file, idx) => (
-                <div
-                  key={`${file.name}-${idx}`}
-                  className="flex items-center gap-2 px-3 py-2 bg-white border border-[#E2E8F0] rounded-xl shadow-xs text-[12px] max-w-[220px]"
-                >
-                  <span className="text-[14px] shrink-0">{getFileIcon(file.name)}</span>
-                  <div className="min-w-0 flex-1">
-                    <div className="font-medium text-[#1E293B] truncate" title={file.name}>
-                      {file.name}
-                    </div>
-                    <div className="text-[10px] text-[#94A3B8]">{formatFileSize(file.size)}</div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => removeAttachedFile(idx)}
-                    className="p-1 rounded-md hover:bg-zinc-100 text-[#94A3B8] hover:text-red-600 shrink-0"
-                    title="Retirer"
-                  >
-                    <X className="w-3 h-3" />
-                  </button>
-                </div>
+                <ComposerFileThumb key={`${file.name}-${file.size}-${idx}`} file={file} onRemove={() => removeAttachedFile(idx)} />
               ))}
             </div>
           </div>
         )}
 
         {fileError && (
-          <div className="px-4 py-2 bg-[#FEF2F2] border-t border-[#FCA5A5] flex items-center justify-between text-[12px] text-[#991B1B]">
+          <div className="px-4 py-2 bg-[#F9FAFB] border-t border-[#E5E7EB] flex items-center justify-between text-[12px] text-[#1F2937]">
             <span>{fileError}</span>
-            <button type="button" onClick={() => setFileError(null)} className="text-[#991B1B]/70 hover:text-[#991B1B]">
+            <button type="button" onClick={() => setFileError(null)} className="text-[#1F2937]/70 hover:text-[#1F2937]">
               <X className="w-3.5 h-3.5" />
             </button>
           </div>
@@ -1228,12 +1252,12 @@ export const AssistantView: React.FC<AssistantViewProps> = ({
 
         {/* Groq Error Alert */}
         {groqError && (
-          <div className="px-4 py-2 bg-[#FEF2F2] border-t border-[#FCA5A5] flex items-center justify-between text-[12px] text-[#991B1B]">
+          <div className="px-4 py-2 bg-[#F9FAFB] border-t border-[#E5E7EB] flex items-center justify-between text-[12px] text-[#1F2937]">
             <span>{groqError}</span>
             <button
               type="button"
               onClick={() => setGroqError(null)}
-              className="text-[#991B1B]/70 hover:text-[#991B1B]"
+              className="text-[#1F2937]/70 hover:text-[#1F2937]"
             >
               <X className="w-3.5 h-3.5" />
             </button>
@@ -1249,9 +1273,9 @@ export const AssistantView: React.FC<AssistantViewProps> = ({
           onDrop={handleDrop}
         >
           {isDragOver && (
-            <div className="absolute inset-2 bg-[#EEF2FF] border-2 border-dashed border-[#6366F1] rounded-2xl flex flex-col items-center justify-center gap-2 z-10 pointer-events-none">
-              <Paperclip className="w-6 h-6 text-[#6366F1]" />
-              <span className="text-[13px] font-semibold text-[#4338CA]">Déposez vos fichiers ici</span>
+            <div className="absolute inset-2 bg-[#F9FAFB] border-2 border-dashed border-[#1F2937] rounded-2xl flex flex-col items-center justify-center gap-2 z-10 pointer-events-none">
+              <Paperclip className="w-6 h-6 text-[#1F2937]" />
+              <span className="text-[13px] font-semibold text-[#1F2937]">Déposez vos fichiers ici</span>
               <span className="text-[11px] text-[#64748B]">Images, PDF, documents (max 8 Mo)</span>
             </div>
           )}
@@ -1267,7 +1291,7 @@ export const AssistantView: React.FC<AssistantViewProps> = ({
             /* Active Groq Voice Recording Bar */
             <div className="p-3 rounded-2xl bg-black text-white border border-zinc-800 flex items-center justify-between gap-4 shadow-md">
               <div className="flex items-center gap-3">
-                <span className="w-3 h-3 rounded-full bg-red-500 animate-pulse shrink-0" />
+                <span className="w-3 h-3 rounded-full bg-white0 animate-pulse shrink-0" />
                 <span className="text-[13px] font-semibold tracking-tight">
                   Enregistrement en cours ({recordingSeconds}s)
                 </span>
@@ -1300,8 +1324,8 @@ export const AssistantView: React.FC<AssistantViewProps> = ({
               <span>Transcription vocale avec Groq Whisper en cours...</span>
             </div>
           ) : (
-            /* Input Claude — Noir & Blanc, toolbar + waveform, Lora en transcription */
-            <ClaudeInputArea
+            /* Input Editorial — Noir & Blanc, toolbar + waveform, Lora en transcription */
+            <ChatInputArea
               value={inputText}
               onChange={setInputText}
               onSend={() => handleSubmitMessage()}
@@ -1335,6 +1359,37 @@ export const AssistantView: React.FC<AssistantViewProps> = ({
             />
           )}
         </div>
+
+        {/* Lightbox plein écran pour les images du chat */}
+        {lightbox && (
+          <div
+            className="fixed inset-0 z-[100] flex flex-col items-center justify-center p-4"
+            style={{ background: 'rgba(0,0,0,0.88)' }}
+            onClick={() => setLightbox(null)}
+          >
+            <div className="flex items-center justify-between w-full max-w-4xl mb-3">
+              <span className="truncate text-[13px] font-medium" style={{ color: 'rgba(255,255,255,0.85)' }} title={lightbox.name}>
+                {lightbox.name}
+              </span>
+              <button
+                type="button"
+                onClick={() => setLightbox(null)}
+                className="p-2 rounded-lg hover:bg-white/10"
+                style={{ color: '#fff' }}
+                title="Fermer (Échap)"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <img
+              src={lightbox.src}
+              alt={lightbox.name}
+              className="max-w-full rounded-xl shadow-2xl"
+              style={{ maxHeight: '82vh', objectFit: 'contain' }}
+              onClick={(e) => e.stopPropagation()}
+            />
+          </div>
+        )}
       </section>
     </div>
   );

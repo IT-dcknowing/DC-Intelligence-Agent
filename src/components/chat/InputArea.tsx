@@ -2,9 +2,9 @@ import React, { useRef, useEffect } from 'react';
 import { Paperclip, Mic, Plus } from 'lucide-react';
 
 /**
- * InputArea — Claude style, Noir & Blanc
+ * InputArea — Editorial style, Noir & Blanc
  * - Floating card : rounded 16-24, border #E8E8E6, shadow 0_2px_15px rgba(0,0,0,0.04), focus #9CA3AF
- * - Toolbar bas : gauche + / toggle Chat-Agent , droite modèle + micro + envoyer
+ * - Toolbar bas : gauche + , droite modèle + micro + envoyer
  * - Textarea auto-extensible 52→200px, Placeholder court, Inter 15px
  * - Mode Enregistrement : waveform (8 barres, animation sound), italique gris, ❌/✓
  * Micro-interactions : scale 0.98 au clic, transitions 0.15s, focus outline 2px #171717
@@ -134,7 +134,7 @@ export const InputArea: React.FC<InputAreaProps> = ({
           }}
         />
 
-        {/* Barre d'outils — comme Claude : gauche + / Chat-Agent, droite modèle + micro + envoyer */}
+        {/* Barre d'outils — gauche +, droite modèle + micro + envoyer */}
         <div className="flex justify-between items-center px-2 pb-2 pt-1">
           {/* Gauche */}
           <div className="flex items-center gap-1.5">
@@ -160,23 +160,7 @@ export const InputArea: React.FC<InputAreaProps> = ({
                 <Paperclip style={{ width: 16, height: 16 }} />
               </button>
             )}
-            {/* Toggle Chat / Agent — discret, comme Claude Cowork */}
-            <div className="hidden sm:flex bg-[#F9F9F8] rounded-lg p-0.5 border" style={{ borderColor: '#E8E8E6' }}>
-              <button
-                type="button"
-                className="px-2.5 py-1 bg-white rounded-md shadow-sm text-xs font-medium"
-                style={{ background: '#fff', color: '#171717', fontSize: '12px', fontWeight: 500 }}
-              >
-                Chat
-              </button>
-              <button
-                type="button"
-                className="px-2.5 py-1 text-xs"
-                style={{ color: '#9CA3AF', fontSize: '12px' }}
-              >
-                Agent
-              </button>
-            </div>
+
           </div>
 
           {/* Droite — deux modes : normal vs enregistrement */}

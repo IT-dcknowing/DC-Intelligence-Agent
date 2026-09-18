@@ -21,6 +21,7 @@ import { buildAccueilDelegationPrompt, parseAccueilDelegationReply } from './ser
 import {
   Agent,
   ApiKeyConfig,
+  ChatAttachment,
   ChatMessage,
   ChatSession,
   KnowledgeDocument,
@@ -33,6 +34,7 @@ import {
   ValidationResult,
   WorkspaceIntegration,
 } from './types';
+import { createImageThumbnail, genericAttachmentLabel } from './services/imageUtils';
 import {
   INITIAL_AGENTS,
   INITIAL_API_KEYS,
@@ -80,6 +82,7 @@ import {
   fetchSessions,
   createSessionRemote,
   appendMessageRemote,
+  uploadChatAttachment,
   renameSessionRemote,
   deleteSessionRemote,
   migrateLocalSessions,
@@ -371,12 +374,14 @@ export default function App() {
             const localOnly = prev.filter((s) => !remoteIds.has(s.id));
             const merged = remoteSessions.map((rs: ChatSession) => {
               const local = prev.find((p) => p.id === rs.id);
+              // Préserve l'épinglage local (non persisté backend)
+              const pinned = local?.pinned;
               if (local && local.messages.length > (rs.messages?.length || 0)) {
                 const extra = local.messages.slice(rs.messages.length);
                 // Garde les messages locaux non encore persistés (optimistic UI)
-                return { ...rs, messages: [...(rs.messages || []), ...extra], lastMessage: extra[extra.length - 1]?.content || rs.lastMessage, lastMessageTime: extra[extra.length - 1]?.timestamp || rs.lastMessageTime };
+                return { ...rs, pinned, messages: [...(rs.messages || []), ...extra], lastMessage: extra[extra.length - 1]?.content || rs.lastMessage, lastMessageTime: extra[extra.length - 1]?.timestamp || rs.lastMessageTime };
               }
-              return rs;
+              return pinned !== undefined ? { ...rs, pinned } : rs;
             });
             return [...localOnly, ...merged].sort((a, b) => String(b.id).localeCompare(String(a.id)));
           });
@@ -465,15 +470,21 @@ export default function App() {
 
     // Écriture immédiate Firestore ; repli local si offline.
     const remote = await createSessionRemote(title, 'Général').catch(() => null);
-    const newSession: ChatSession = remote || {
-      id: `session-${Date.now()}`,
-      title,
-      category: 'Général',
-      lastMessage: 'Session créée, prête pour vos questions...',
-      lastMessageTime: timeStr,
-      createdAt: 'À l’instant',
-      messages: [],
-    };
+    const nowMs = Date.now();
+    const base: ChatSession = remote
+      ? { ...remote, createdAtMs: remote.createdAtMs || nowMs, updatedAtMs: nowMs }
+      : {
+          id: `session-${nowMs}`,
+          title,
+          category: 'Général',
+          lastMessage: 'Session créée, prête pour vos questions...',
+          lastMessageTime: timeStr,
+          createdAt: 'À l’instant',
+          createdAtMs: nowMs,
+          updatedAtMs: nowMs,
+          messages: [],
+        };
+    const newSession: ChatSession = base;
 
     setChatSessions((prev) => [newSession, ...prev]);
     setSelectedSessionId(newSession.id);
@@ -509,17 +520,30 @@ export default function App() {
     addToast('success', 'Session renommée', `Nouveau titre : ${newTitle}`);
   };
 
+  const handleTogglePinSession = (sessionId: string) => {
+    setChatSessions((prev) =>
+      prev.map((s) => (s.id === sessionId ? { ...s, pinned: !s.pinned } : s))
+    );
+  };
+
   const handleSendMessage = async (sessionId: string, text: string, file?: File) => {
     const now = new Date();
     const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(
       now.getMinutes()
     ).padStart(2, '0')}`;
 
-    const displayContent = file ? (text ? `${text}\n[📎 ${file.name}]` : `📎 ${file.name}`) : text;
+    const trimmed = text.trim();
+    // Libellé générique pour la sidebar/lastMessage — jamais le nom brut du fichier.
+    const fileLabel = file ? genericAttachmentLabel(file.type) : '';
 
-    // Déduplication : même contenu + même pièce <2min → ne pas créer de doublon, relancer le précédent
+    // Déduplication : même texte + même pièce <2min → ne pas créer de doublon
     const lastMsg = chatSessions.find((s) => s.id === sessionId)?.messages.slice(-1)[0];
-    if (lastMsg && lastMsg.sender === 'user' && lastMsg.content === displayContent) {
+    if (
+      lastMsg &&
+      lastMsg.sender === 'user' &&
+      lastMsg.content === trimmed &&
+      (file ? lastMsg.attachments?.[0]?.name === file.name : !lastMsg.attachments?.length)
+    ) {
       const lastTs = parseInt((lastMsg.id.split('-')[1] || '0'), 10);
       if (!isNaN(lastTs) && Date.now() - lastTs < 120000) {
         addToast('info', 'Message identique détecté', 'Traitement déjà en cours — pas de doublon créé.');
@@ -527,25 +551,129 @@ export default function App() {
       }
     }
 
+    // Pièce jointe optimiste : blob local immédiat (rendu instantané) + miniature
+    // compressée. L'upload réel part en arrière-plan et patche le storagePath.
+    const optimisticAtts: ChatAttachment[] = file
+      ? [
+          {
+            name: file.name,
+            mimeType: file.type || 'application/octet-stream',
+            size: file.size,
+            url: URL.createObjectURL(file),
+            uploading: true,
+          },
+        ]
+      : [];
+
     const userMsg: ChatMessage = {
       id: `msg-${Date.now()}`,
       sender: 'user',
       senderName: 'Vous',
-      content: displayContent,
+      content: trimmed,
       timestamp: timeStr,
+      ...(optimisticAtts.length ? { attachments: optimisticAtts } : {}),
     };
 
-    // Télémétrie frustration cross-canal (§2.2) : best-effort, jamais bloquant.
-    // Le compteur vit côté backend (user_signals, clé = user_id navigateur).
+    const patchAttachments = (patch: Partial<ChatAttachment>) => {
+      setChatSessions((prev) =>
+        prev.map((s) =>
+          s.id === sessionId
+            ? {
+                ...s,
+                messages: s.messages.map((m) =>
+                  m.id === userMsg.id && m.attachments
+                    ? { ...m, attachments: m.attachments.map((a) => ({ ...a, ...patch })) }
+                    : m
+                ),
+              }
+            : s
+        )
+      );
+    };
+
+    // Miniature compressée côté client (non bloquante) pour un affichage rapide.
+    if (file && (file.type || '').startsWith('image/')) {
+      createImageThumbnail(file)
+        .then((thumb) => patchAttachments({ thumbUrl: thumb }))
+        .catch(() => {});
+    }
+
+    // 1. Optimiste IMMÉDIAT — animation message-enter sans attendre la classification
+    const currentSession = chatSessions.find((s) => s.id === sessionId);
+    const titleText = trimmed;
+    const isDefaultTitle = currentSession?.title.startsWith('Nouvelle session');
+    const nextTitle = isDefaultTitle && titleText
+      ? titleText.slice(0, 32) + (titleText.length > 32 ? '...' : '')
+      : currentSession?.title;
+    if (isDefaultTitle && nextTitle) {
+      renameSessionRemote(sessionId, nextTitle).catch(() => {});
+    }
+    const remoteAttachmentsFor = (storagePath?: string) =>
+      file
+        ? [
+            {
+              name: file.name,
+              mimeType: file.type || 'application/octet-stream',
+              size: file.size,
+              ...(storagePath ? { storagePath } : {}),
+            },
+          ]
+        : undefined;
+    if (file) {
+      // Persistance après upload réel : le message stocké porte le storagePath.
+      uploadChatAttachment(sessionId, file)
+        .then((r) => {
+          patchAttachments({ storagePath: r.storagePath, uploading: false });
+          appendMessageRemote(sessionId, {
+            sender: 'user',
+            senderName: 'Vous',
+            content: trimmed || ' ',
+            agentName: 'DC Intelligence',
+            attachments: remoteAttachmentsFor(r.storagePath),
+          }).catch(() => {});
+        })
+        .catch(() => {
+          patchAttachments({ uploading: false, uploadError: true });
+          appendMessageRemote(sessionId, {
+            sender: 'user',
+            senderName: 'Vous',
+            content: trimmed || ' ',
+            agentName: 'DC Intelligence',
+          }).catch(() => {});
+          addToast('warning', 'Pièce jointe non stockée', 'Le message est envoyé, mais le fichier reste visible uniquement sur cet appareil.');
+        });
+    } else {
+      appendMessageRemote(sessionId, {
+        sender: 'user',
+        senderName: 'Vous',
+        content: trimmed,
+        agentName: 'DC Intelligence',
+      }).catch(() => {});
+    }
+    setChatSessions((prev) =>
+      prev.map((s) => {
+        if (s.id === sessionId) {
+          return {
+            ...s,
+            title: nextTitle || s.title,
+            lastMessage: trimmed || fileLabel || s.lastMessage,
+            lastMessageTime: timeStr,
+            updatedAtMs: Date.now(),
+            messages: [...s.messages, userMsg],
+          };
+        }
+        return s;
+      })
+    );
+    setIsGenerating(true);
+
     if (isFrustratedText(text)) {
       postUserSignal('frustration').catch(() => {});
     }
 
-    // Multimodal Classification & Auto-Routing : l'Agent Accueil (vrai LLM avec mémoire)
-    // décide lui-même à qui déléguer via ses outils. La heuristique reste en fallback.
+    // 2. Classification & routage en arrière-plan (ne bloque plus l'affichage)
     const multimodalRes = await classifyAndExtractMultimodalInput({ text, file });
     let routingRes = routeUserRequest(text, multimodalRes);
-    // Tentative LLM : l'Accueil décide via son prompt outils + mémoire
     try {
       const accueilAgentForDecision = agents.find((a) => a.isDefaultEntry || a.isRouter) || getDefaultEntryAgent(agents);
       const sessForHistory = chatSessions.find((s) => s.id === sessionId);
@@ -598,7 +726,7 @@ export default function App() {
     }
 
     const entryAgent = getDefaultEntryAgent(agents);
-    const visibleAgent = entryAgent; // façade unique : le client ne parle qu'à DC Intelligence
+    const visibleAgent = entryAgent;
     const targetAgent =
       agents.find((a) => a.id === routingRes.targetAgentId) || entryAgent;
     const needsDelegation =
@@ -606,58 +734,17 @@ export default function App() {
       routingRes.confidence >= 0.7 &&
       !routingRes.requiresClarification;
 
-    // L'UI reste sur la façade ; la délégation est interne et tracée.
-    // On ne bascule plus l'UI vers le spécialiste : le client voit toujours DC Intelligence.
-    // Le spécialiste est l'exécutant interne, pas l'interlocuteur.
-
-    // Create central Task in Task Engine — VRAIE tâche pour toute délégation non triviale
-    // (jamais de "Je regarde" sans taskId backend).
     const currentTask = createTask({
       agentId: needsDelegation ? targetAgent.name : visibleAgent.name,
       action: (needsDelegation
         ? targetAgent.allowedActions && targetAgent.allowedActions[0]
         : visibleAgent.allowedActions && visibleAgent.allowedActions[0]) || 'PREPARE',
-      input: displayContent,
+      input: trimmed || fileLabel,
       status: 'RUNNING',
     });
 
-    userMsg.multimodalResult = multimodalRes;
-    userMsg.taskRef = currentTask;
-
-    // 1. Update session immediately with user message (+ persistance Firestore immédiate)
-    const currentSession = chatSessions.find((s) => s.id === sessionId);
-    const titleText = text || (file ? file.name : '');
-    const isDefaultTitle = currentSession?.title.startsWith('Nouvelle session');
-    const nextTitle = isDefaultTitle
-      ? titleText.slice(0, 32) + (titleText.length > 32 ? '...' : '')
-      : currentSession?.title;
-    if (isDefaultTitle && nextTitle) {
-      renameSessionRemote(sessionId, nextTitle).catch(() => {});
-    }
-    appendMessageRemote(sessionId, {
-      sender: 'user',
-      senderName: 'Vous',
-      content: displayContent,
-      agentName: targetAgent.name,
-    }).catch(() => {});
-    setChatSessions((prev) =>
-      prev.map((s) => {
-        if (s.id === sessionId) {
-          return {
-            ...s,
-            title: nextTitle || s.title,
-            lastMessage: displayContent,
-            lastMessageTime: timeStr,
-            messages: [...s.messages, userMsg],
-          };
-        }
-        return s;
-      })
-    );
-
-    // 2. Prepare context for real LLM Call
+    // 3. Contexte pour l'appel LLM — history snapshot avant le nouveau message (comme avant)
     const targetSession = chatSessions.find((s) => s.id === sessionId);
-    setIsGenerating(true);
 
     try {
       const history = targetSession ? targetSession.messages : [];
@@ -1168,7 +1255,7 @@ export default function App() {
       className="flex h-screen w-screen bg-white text-[#09090B] overflow-hidden font-['Inter'] antialiased"
       style={{ fontFamily: "'Inter', -apple-system, sans-serif" }}
     >
-      {/* 1. Colonne gauche : Le menu principal (Sidebar) */}
+      {/* 1. Colonne gauche : menu + Conversations intégrées (style Claude) */}
       <Sidebar
         currentTab={currentTab}
         onSelectTab={(tab) => {
@@ -1179,11 +1266,21 @@ export default function App() {
         }}
         isCollapsed={isSidebarCollapsed}
         onToggleCollapse={() => setIsSidebarCollapsed((prev) => !prev)}
+        sessions={chatSessions}
+        selectedSessionId={selectedSessionId}
+        onSelectSession={(id) => {
+          setSelectedSessionId(id);
+          setCurrentTab('assistant');
+        }}
+        onNewSession={handleNewSession}
+        onDeleteSession={handleDeleteSession}
+        onRenameSession={handleRenameSession}
+        onTogglePinSession={handleTogglePinSession}
       />
 
       {/* 2. Zone principale */}
       <main id="app-main-workspace" className="flex-1 flex h-full min-w-0 overflow-hidden bg-white relative">
-        {/* VIEW 1: ASSISTANT (3-column experience: Colonne gauche=Menu, Colonne centrale=Sessions, Colonne droite=Chat IA) */}
+        {/* VIEW 1: ASSISTANT (chat pleine largeur, historique dans la Sidebar) */}
         {(currentTab === 'assistant' || currentTab === 'conversations') && (
           <AssistantView
             sessions={chatSessions}

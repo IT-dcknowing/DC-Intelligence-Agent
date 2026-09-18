@@ -324,12 +324,12 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
                     <div
                       className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 border ${
                         item.id === 'google-sheets'
-                          ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                          ? 'bg-[#F4F4F5] text-[#1F2937] border-[#E5E7EB]'
                           : item.id === 'legal-flow'
-                          ? 'bg-purple-50 text-purple-700 border-purple-200'
+                          ? 'bg-[#F4F4F5] text-[#1F2937] border-[#E5E7EB]'
                           : item.id === 'compta-flow'
-                          ? 'bg-teal-50 text-teal-700 border-teal-200'
-                          : 'bg-blue-50 text-blue-700 border-blue-200'
+                          ? 'bg-[#F4F4F5] text-[#1F2937] border-[#E5E7EB]'
+                          : 'bg-[#F4F4F5] text-[#1F2937] border-[#E5E7EB]'
                       }`}
                     >
                       {item.id === 'google-sheets' ? (
@@ -352,17 +352,17 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
                     </div>
                   </div>
 
-                  {/* Status Pill */}
+                  {/* Status Pill — monochrome */}
                   <span
-                    className={`inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full shrink-0 ${
+                    className={`inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full shrink-0 border ${
                       isConnected
-                        ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
-                        : 'bg-zinc-100 text-zinc-600 border border-zinc-200'
+                        ? 'bg-[#F3F4F6] text-[#1F2937] border-[#E5E7EB]'
+                        : 'bg-white text-[#6B7280] border-[#E5E7EB]'
                     }`}
                   >
                     <span
                       className={`w-1.5 h-1.5 rounded-full ${
-                        isConnected ? 'bg-emerald-600' : 'bg-zinc-400'
+                        isConnected ? 'bg-[#111827]' : 'bg-[#D1D5DB]'
                       }`}
                     />
                     <span>{isConnected ? 'Connecté' : 'Inactif'}</span>
@@ -373,7 +373,7 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
                   {item.description}
                 </p>
 
-                <div className="mt-2 pt-2 border-t border-zinc-100 flex items-center justify-between text-[10px] text-[#94A3B8]">
+                <div className="mt-2 pt-2 border-t border-[#E5E7EB] flex items-center justify-between text-[10px] text-[#94A3B8]">
                   <span>
                     {isConnected ? item.accountEmail || 'Compte actif' : 'Cliquez pour configurer'}
                   </span>
@@ -386,7 +386,7 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
 
         {/* Security badge at bottom */}
         <div className="p-3 border-t border-[#E2E8F0] bg-white text-[11px] text-[#64748B] flex items-center gap-2">
-          <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" />
+          <ShieldCheck className="w-4 h-4 text-[#1F2937] shrink-0" />
           <span>Authentification sécurisée OAuth 2.0 Google</span>
         </div>
       </aside>
@@ -404,12 +404,12 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
             <div
               className={`w-11 h-11 rounded-xl flex items-center justify-center shrink-0 border ${
                 selectedIntegration.id === 'google-sheets'
-                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                  ? 'bg-[#F4F4F5] text-[#1F2937] border-[#E5E7EB]'
                   : selectedIntegration.id === 'legal-flow'
-                  ? 'bg-purple-50 text-purple-700 border-purple-200'
+                  ? 'bg-[#F4F4F5] text-[#1F2937] border-[#E5E7EB]'
                   : selectedIntegration.id === 'compta-flow'
-                  ? 'bg-teal-50 text-teal-700 border-teal-200'
-                  : 'bg-blue-50 text-blue-700 border-blue-200'
+                  ? 'bg-[#F4F4F5] text-[#1F2937] border-[#E5E7EB]'
+                  : 'bg-[#F4F4F5] text-[#1F2937] border-[#E5E7EB]'
               }`}
             >
               {selectedIntegration.id === 'google-sheets' ? (
@@ -429,10 +429,10 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
                   Procédure de connexion : {selectedIntegration.name}
                 </h1>
                 <span
-                  className={`text-[11px] font-semibold px-2 py-0.5 rounded-full ${
+                  className={`text-[11px] font-semibold px-2 py-0.5 rounded-full border ${
                     selectedIntegration.status === 'connected'
-                      ? 'bg-emerald-100 text-emerald-800'
-                      : 'bg-zinc-100 text-zinc-600'
+                      ? 'bg-[#F3F4F6] text-[#1F2937] border-[#E5E7EB]'
+                      : 'bg-white text-[#6B7280] border-[#E5E7EB]'
                   }`}
                 >
                   {selectedIntegration.status === 'connected' ? 'Connecté' : 'Non associé'}
@@ -461,7 +461,7 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
         {feedbackNotice && (
           <div className="bg-[#F4F4F5] border-b border-[#E4E4E7] px-6 py-2.5 text-[12px] text-[#18181B] flex items-center justify-between">
             <div className="flex items-center gap-2">
-              <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+              <CheckCircle2 className="w-4 h-4 text-[#1F2937]" />
               <span className="font-semibold">{feedbackNotice}</span>
             </div>
             <button
@@ -502,9 +502,9 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
             </p>
 
             {selectedIntegration.status === 'connected' ? (
-              <div className="p-4 rounded-xl bg-white border border-emerald-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs">
+              <div className="p-4 rounded-xl bg-white border border-[#E5E7EB] flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs">
                 <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-full bg-purple-100 text-purple-800 font-bold flex items-center justify-center text-sm border border-purple-300">
+                  <div className="w-10 h-10 rounded-full bg-[#F3F4F6] text-[#1F2937] font-bold flex items-center justify-center text-sm border border-[#E5E7EB]">
                     {mcpMeta.initials}
                   </div>
                   <div>
@@ -521,7 +521,7 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
                   <button
                     type="button"
                     onClick={handleConnectClick}
-                    className="px-3 py-1.5 rounded-lg border border-red-200 text-red-700 bg-red-50 hover:bg-red-100 font-semibold text-[12px] flex items-center gap-1.5 transition-colors cursor-pointer"
+                    className="px-3 py-1.5 rounded-lg border border-[#E5E7EB] text-[#1F2937] bg-white hover:bg-[#F3F4F6] font-semibold text-[12px] flex items-center gap-1.5 transition-colors cursor-pointer"
                   >
                     <Unlink className="w-3.5 h-3.5" />
                     <span>Dissocier</span>
@@ -548,7 +548,7 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
             {/* Scopes description */}
             <div className="text-[11px] text-[#94A3B8] flex items-center gap-1.5">
               <span>Outils exposés :</span>
-              <code className="bg-zinc-100 text-zinc-700 px-1.5 py-0.5 rounded font-mono">
+              <code className="bg-[#F3F4F6] text-[#1F2937] px-1.5 py-0.5 rounded font-mono">
                 {selectedIntegration.scopes.join(', ')}
               </code>
             </div>
@@ -575,9 +575,9 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
             </p>
 
             {selectedIntegration.status === 'connected' ? (
-              <div className="p-4 rounded-xl bg-white border border-emerald-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs">
+              <div className="p-4 rounded-xl bg-white border border-[#E5E7EB] flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs">
                 <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-full bg-emerald-100 text-emerald-800 font-bold flex items-center justify-center text-sm border border-emerald-300">
+                  <div className="w-10 h-10 rounded-full bg-[#F3F4F6] text-[#1F2937] font-bold flex items-center justify-center text-sm border border-[#E5E7EB]">
                     {(selectedIntegration.accountEmail?.[0] || 'G').toUpperCase()}
                   </div>
                   <div>
@@ -594,7 +594,7 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
                   <button
                     type="button"
                     onClick={handleConnectClick}
-                    className="px-3 py-1.5 rounded-lg border border-red-200 text-red-700 bg-red-50 hover:bg-red-100 font-semibold text-[12px] flex items-center gap-1.5 transition-colors cursor-pointer"
+                    className="px-3 py-1.5 rounded-lg border border-[#E5E7EB] text-[#1F2937] bg-white hover:bg-[#F3F4F6] font-semibold text-[12px] flex items-center gap-1.5 transition-colors cursor-pointer"
                   >
                     <Unlink className="w-3.5 h-3.5" />
                     <span>Déconnecter</span>
@@ -615,19 +615,19 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
                 >
                   <svg className="w-4 h-4" viewBox="0 0 24 24">
                     <path
-                      fill="#EA4335"
+                      fill="#111827"
                       d="M12 5c1.6 0 3 .6 4.1 1.6l3.1-3.1C17.3 1.7 14.8 1 12 1 7.5 1 3.7 3.6 1.9 7.3l3.7 2.9C6.5 7.4 9 5 12 5z"
                     />
                     <path
-                      fill="#4285F4"
+                      fill="#111827"
                       d="M23.5 12.3c0-.8-.1-1.6-.2-2.3H12v4.6h6.5c-.3 1.5-1.1 2.8-2.4 3.7l3.7 2.9c2.2-2 3.7-5.1 3.7-8.9z"
                     />
                     <path
-                      fill="#FBBC05"
+                      fill="#111827"
                       d="M5.6 14.8c-.2-.7-.4-1.5-.4-2.3 0-.8.1-1.6.4-2.3L1.9 7.3C.7 9.7 0 12 0 14.8s.7 5.1 1.9 7.5l3.7-2.9z"
                     />
                     <path
-                      fill="#34A853"
+                      fill="#111827"
                       d="M12 23c3.2 0 6-1.1 8-3l-3.7-2.9c-1.1.7-2.5 1.2-4.3 1.2-3 0-5.5-2-6.4-4.8L1.9 16.4C3.7 20.1 7.5 23 12 23z"
                     />
                   </svg>
@@ -639,7 +639,7 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
             {/* Scopes description */}
             <div className="text-[11px] text-[#94A3B8] flex items-center gap-1.5">
               <span>Autorisation demandée :</span>
-              <code className="bg-zinc-100 text-zinc-700 px-1.5 py-0.5 rounded font-mono">
+              <code className="bg-[#F3F4F6] text-[#1F2937] px-1.5 py-0.5 rounded font-mono">
                 {(selectedIntegration.scopes || []).join(', ') || '—'}
               </code>
             </div>
@@ -704,7 +704,7 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
                     <button
                       type="button"
                       onClick={handleCreateDefaultResource}
-                      className="px-3 py-1 text-[12px] font-semibold rounded-lg bg-zinc-100 hover:bg-zinc-200 text-black transition-colors"
+                      className="px-3 py-1 text-[12px] font-semibold rounded-lg bg-[#F3F4F6] hover:bg-zinc-200 text-black transition-colors"
                     >
                       + Créer fichier type
                     </button>
@@ -732,33 +732,33 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
 
               {/* Format Preview */}
               {isMcp ? (
-                <div className="mt-3 pt-3 border-t border-zinc-100 text-[11px] text-[#64748B]">
+                <div className="mt-3 pt-3 border-t border-[#E5E7EB] text-[11px] text-[#64748B]">
                   <span className="font-semibold text-[#1E293B] block mb-1">
                     Endpoint interrogé :
                   </span>
-                  <code className="font-mono text-[10px] bg-zinc-100 text-zinc-800 px-2 py-0.5 rounded">
+                  <code className="font-mono text-[10px] bg-[#F3F4F6] text-[#1F2937] px-2 py-0.5 rounded">
                     {selectedIntegration.endpointUrl || 'non configuré'}
                   </code>
                 </div>
               ) : selectedIntegration.id === 'google-sheets' ? (
-                <div className="mt-3 pt-3 border-t border-zinc-100 text-[11px] text-[#64748B]">
+                <div className="mt-3 pt-3 border-t border-[#E5E7EB] text-[11px] text-[#64748B]">
                   <span className="font-semibold text-[#1E293B] block mb-1.5">
                     Colonnes synchronisées dans le classeur :
                   </span>
                   <div className="flex flex-wrap gap-1.5 font-mono text-[10px]">
-                    <span className="px-2 py-0.5 rounded bg-zinc-100 text-zinc-800">Date</span>
-                    <span className="px-2 py-0.5 rounded bg-zinc-100 text-zinc-800">Journal (ACH/VTE/BQ/OD)</span>
-                    <span className="px-2 py-0.5 rounded bg-zinc-100 text-zinc-800">N° Pièce</span>
-                    <span className="px-2 py-0.5 rounded bg-zinc-100 text-zinc-800">Compte Débit</span>
-                    <span className="px-2 py-0.5 rounded bg-zinc-100 text-zinc-800">Compte Crédit</span>
-                    <span className="px-2 py-0.5 rounded bg-zinc-100 text-zinc-800">Libellé d'écriture</span>
-                    <span className="px-2 py-0.5 rounded bg-zinc-100 text-zinc-800">Montant HT</span>
-                    <span className="px-2 py-0.5 rounded bg-zinc-100 text-zinc-800">TVA 18%</span>
-                    <span className="px-2 py-0.5 rounded bg-zinc-100 text-zinc-800">Montant TTC</span>
+                    <span className="px-2 py-0.5 rounded bg-[#F3F4F6] text-[#1F2937]">Date</span>
+                    <span className="px-2 py-0.5 rounded bg-[#F3F4F6] text-[#1F2937]">Journal (ACH/VTE/BQ/OD)</span>
+                    <span className="px-2 py-0.5 rounded bg-[#F3F4F6] text-[#1F2937]">N° Pièce</span>
+                    <span className="px-2 py-0.5 rounded bg-[#F3F4F6] text-[#1F2937]">Compte Débit</span>
+                    <span className="px-2 py-0.5 rounded bg-[#F3F4F6] text-[#1F2937]">Compte Crédit</span>
+                    <span className="px-2 py-0.5 rounded bg-[#F3F4F6] text-[#1F2937]">Libellé d'écriture</span>
+                    <span className="px-2 py-0.5 rounded bg-[#F3F4F6] text-[#1F2937]">Montant HT</span>
+                    <span className="px-2 py-0.5 rounded bg-[#F3F4F6] text-[#1F2937]">TVA 18%</span>
+                    <span className="px-2 py-0.5 rounded bg-[#F3F4F6] text-[#1F2937]">Montant TTC</span>
                   </div>
                 </div>
               ) : (
-                <div className="mt-3 pt-3 border-t border-zinc-100 text-[11px] text-[#64748B]">
+                <div className="mt-3 pt-3 border-t border-[#E5E7EB] text-[11px] text-[#64748B]">
                   <span className="font-semibold text-[#1E293B] block mb-1">
                     Structure du document généré :
                   </span>
@@ -788,14 +788,14 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
             </div>
 
             {Array.isArray(selectedIntegration.syncHistory) && selectedIntegration.syncHistory.length > 0 ? (
-              <div className="divide-y divide-zinc-100 border border-zinc-100 rounded-xl overflow-hidden">
+              <div className="divide-y divide-zinc-100 border border-[#E5E7EB] rounded-xl overflow-hidden">
                 {selectedIntegration.syncHistory.filter((log) => log && typeof log === 'object').map((log) => (
                   <div
                     key={log.id}
-                    className="p-3 bg-zinc-50/50 hover:bg-zinc-50 flex items-center justify-between text-[12px] transition-colors"
+                    className="p-3 bg-[#F9FAFB]/50 hover:bg-[#F9FAFB] flex items-center justify-between text-[12px] transition-colors"
                   >
                     <div className="flex items-center gap-2.5">
-                      <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                      <CheckCircle2 className="w-4 h-4 text-[#1F2937] shrink-0" />
                       <span className="font-medium text-[#1E293B]">{log.action}</span>
                     </div>
                     <span className="text-[11px] font-mono text-[#94A3B8] shrink-0">
@@ -805,7 +805,7 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
                 ))}
               </div>
             ) : (
-              <div className="p-6 text-center text-[12px] text-[#94A3B8] bg-zinc-50 rounded-xl">
+              <div className="p-6 text-center text-[12px] text-[#94A3B8] bg-[#F9FAFB] rounded-xl">
                 Aucune synchronisation enregistrée pour l'instant.
               </div>
             )}

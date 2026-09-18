@@ -7,7 +7,7 @@ import { Sidebar } from './Sidebar';
 import type { ChatMessage, ChatSession } from '../../types';
 
 /**
- * ChatView — Assemblage complet Claude.ai + Noir & Blanc
+ * ChatView — Assemblage complet Editorial.ai + Noir & Blanc
  * Compose Sidebar + ChatContainer + InputArea + TypingIndicator
  * Design decision : ce fichier est le seul point d'assemblage —
  * chaque sous-composant reste réutilisable et testable isolément.

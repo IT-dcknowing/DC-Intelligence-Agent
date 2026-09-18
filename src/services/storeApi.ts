@@ -5,7 +5,7 @@
  * Aucun secret n'est jamais envoyé : les endpoints refusent les champs token.
  */
 import { apiUrl } from '../config/env';
-import type { Agent, ChatMessage, ChatSession, KnowledgeDocument, WorkspaceIntegration } from '../types';
+import type { Agent, ChatAttachment, ChatMessage, ChatSession, KnowledgeDocument, WorkspaceIntegration } from '../types';
 
 async function api<T>(path: string, init?: RequestInit, timeoutMs = 15000): Promise<T | null> {
   const ctrl = new AbortController();
@@ -190,6 +190,8 @@ export function backendSessionToChat(s: any, messages: any[]): ChatSession {
       return '';
     }
   };
+  const createdMs = Date.parse(String(s.createdAt || '')) || Date.parse(String(s.updatedAt || '')) || 0;
+  const updatedMs = Date.parse(String(s.updatedAt || s.lastMessageTime || s.createdAt || '')) || createdMs;
   return {
     id: String(s.id),
     title: String(s.title || 'Session'),
@@ -197,6 +199,8 @@ export function backendSessionToChat(s: any, messages: any[]): ChatSession {
     lastMessage: String(s.lastMessage || ''),
     lastMessageTime: toTime(String(s.lastMessageTime || s.updatedAt || '')),
     createdAt: toDate(String(s.createdAt || '')),
+    createdAtMs: Number.isFinite(createdMs) && createdMs > 0 ? createdMs : undefined,
+    updatedAtMs: Number.isFinite(updatedMs) && updatedMs > 0 ? updatedMs : undefined,
     activeAgentId: s.activeAgentId ? String(s.activeAgentId) : undefined,
     messages: (Array.isArray(messages) ? messages : []).map((m: any): ChatMessage => ({
       id: String(m.id || `msg-${Math.random().toString(36).slice(2, 8)}`),
@@ -204,6 +208,20 @@ export function backendSessionToChat(s: any, messages: any[]): ChatSession {
       senderName: String(m.senderName || 'Vous'),
       content: String(m.content || ''),
       timestamp: toTime(String(m.timestamp || m.createdAt || '')),
+      attachments: Array.isArray(m.attachments)
+        ? m.attachments
+            .filter((a: any) => a && typeof a === 'object')
+            .slice(0, 5)
+            .map((a: any): ChatAttachment => ({
+              name: String(a.name || 'fichier'),
+              mimeType: String(a.mimeType || 'application/octet-stream'),
+              size: Number.isFinite(Number(a.size)) ? Number(a.size) : 0,
+              storagePath: typeof a.storagePath === 'string' ? a.storagePath : undefined,
+              url: typeof a.url === 'string' ? a.url : undefined,
+              thumbUrl: typeof a.thumbUrl === 'string' ? a.thumbUrl : undefined,
+            }))
+            .filter((a: ChatAttachment) => Boolean(a.name))
+        : undefined,
       ...(m.agentName
         ? {
             taskRef: {
@@ -245,9 +263,64 @@ export async function createSessionRemote(title: string, category = 'Général')
 
 export async function appendMessageRemote(
   sessionId: string,
-  msg: { sender: 'user' | 'agent' | 'system'; senderName: string; content: string; agentName?: string }
+  msg: {
+    sender: 'user' | 'agent' | 'system';
+    senderName: string;
+    content: string;
+    agentName?: string;
+    attachments?: Array<{ name: string; mimeType: string; size: number; storagePath?: string }>;
+  }
 ): Promise<void> {
   await post(`/conversations/${encodeURIComponent(sessionId)}/messages`, { message: msg });
+}
+
+// ---------- Pièces jointes du chat (images, PDF) ----------
+// Upload réel : le binaire part au backend (Firebase Storage, 8 Mo max),
+// seul le storagePath est persisté dans le message. La lecture repasse
+// par le backend (base64), comme /knowledge/:id/download — jamais d'URL signée.
+
+export interface ChatUploadResult {
+  storagePath: string;
+  name: string;
+  mimeType: string;
+  size: number;
+}
+
+export async function uploadChatAttachment(sessionId: string, file: File): Promise<ChatUploadResult> {
+  if (!file || file.size <= 0 || file.size > 8_000_000) {
+    throw new Error('Fichier invalide ou trop volumineux (max 8 Mo).');
+  }
+  const base64 = await fileToBase64(file);
+  const data = await post<{ ok: boolean; storagePath: string; name: string; mimeType: string; size: number }>(
+    '/chat/upload',
+    { sessionId, name: file.name, mimeType: file.type || 'application/octet-stream', base64 }
+  );
+  if (!data || !data.ok || !data.storagePath) {
+    throw new Error('Échec de l’envoi de la pièce jointe. Réessayez.');
+  }
+  return { storagePath: data.storagePath, name: data.name, mimeType: data.mimeType, size: data.size };
+}
+
+const attachmentCache = new Map<string, { base64: string; mimeType: string; name: string }>();
+
+export async function fetchChatAttachment(
+  storagePath: string
+): Promise<{ base64: string; mimeType: string; name: string }> {
+  const cached = attachmentCache.get(storagePath);
+  if (cached) return cached;
+  const data = await get<{ ok: boolean; base64: string; mimeType: string; name: string }>(
+    `/chat/attachment?path=${encodeURIComponent(storagePath)}`
+  );
+  if (!data || !data.ok || !data.base64) {
+    throw new Error('Pièce jointe indisponible.');
+  }
+  const row = { base64: data.base64, mimeType: data.mimeType, name: data.name };
+  attachmentCache.set(storagePath, row);
+  return row;
+}
+
+export function chatAttachmentDataUrl(base64: string, mimeType: string): string {
+  return `data:${mimeType || 'application/octet-stream'};base64,${base64}`;
 }
 
 export async function renameSessionRemote(sessionId: string, title: string): Promise<void> {

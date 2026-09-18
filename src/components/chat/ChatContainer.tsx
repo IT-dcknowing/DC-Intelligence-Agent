@@ -4,7 +4,7 @@ import { TypingIndicator } from './TypingIndicator';
 import type { ChatMessage } from '../../types';
 
 /**
- * ChatContainer — Claude centered, 740px, 32px gap, editorial
+ * ChatContainer — Editorial centered, 740px, 32px gap, editorial
  * - Welcome screen "Salut, Kouassi" (Playfair, disparaît au 1er message)
  * - Messages : IA full-width no bubble, User 70% right #171717
  * - Smooth scroll, generous whitespace, no heavy borders
@@ -53,7 +53,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({
       className="flex-1 overflow-y-auto w-full relative scroll-smooth bg-white"
       style={{ background: '#FFFFFF' }}
     >
-      {/* Welcome — comme Claude, editorial, disparaît avec opacity */}
+      {/* Welcome — comme Editorial, editorial, disparaît avec opacity */}
       {isEmpty && !isGenerating && (
         <div className="absolute inset-0 flex flex-col items-center justify-center px-6 py-8 overflow-y-auto">
           {/* Icône soleil tournante très lente */}
@@ -77,7 +77,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({
             Comment puis-je vous aider aujourd'hui ?
           </p>
 
-          {/* Quick prompts — éditorial, 2 colonnes, comme Claude */}
+          {/* Quick prompts — éditorial, 2 colonnes, comme Editorial */}
           {quickPrompts && quickPrompts.length > 0 && (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-8 max-w-[560px] w-full text-left">
               {quickPrompts.map((item, idx) => (

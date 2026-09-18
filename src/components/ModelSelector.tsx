@@ -294,8 +294,8 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
                             {isBackendManaged(prov.id) ? 'Prêt — cabinet' : 'Prêt'}
                           </span>
                         ) : (
-                          <span className="inline-flex items-center gap-1 text-[10px] text-[#F59E0B] shrink-0 font-medium">
-                            <span className="w-1.5 h-1.5 rounded-full bg-[#F59E0B]"></span>
+                          <span className="inline-flex items-center gap-1 text-[10px] text-[#6B7280] shrink-0 font-medium">
+                            <span className="w-1.5 h-1.5 rounded-full bg-[#6B7280]"></span>
                             Clé requise
                           </span>
                         )}
@@ -349,7 +349,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
                                       onDeleteCustomModel(model.id);
                                     }}
                                     title="Supprimer ce modèle personnalisé"
-                                    className="opacity-0 group-hover:opacity-100 p-1 text-[#6B7280] hover:text-red-600 rounded transition-opacity"
+                                    className="opacity-0 group-hover:opacity-100 p-1 text-[#6B7280] hover:text-[#111827] rounded transition-opacity"
                                   >
                                     <Trash2 className="w-3 h-3" />
                                   </button>

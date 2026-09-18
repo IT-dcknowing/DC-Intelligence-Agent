@@ -445,7 +445,7 @@ export const ConversationDetail: React.FC<ConversationDetailProps> = ({
     >
       {/* 1. Dismissable Demo Mode Banner (Chantier 7) */}
       {isDemoMode && (
-        <div className="bg-[#FEF3C7] border-b border-[#FDE68A] px-4 py-2 flex items-center justify-between text-[12px] text-[#92400E] z-20 shrink-0">
+        <div className="bg-[#F9FAFB] border-b border-[#E5E7EB] px-4 py-2 flex items-center justify-between text-[12px] text-[#1F2937] z-20 shrink-0">
           <div className="flex items-center gap-2">
             <span>🎭</span>
             <span className="font-semibold">Mode démonstration actif :</span>
@@ -455,7 +455,7 @@ export const ConversationDetail: React.FC<ConversationDetailProps> = ({
             <button
               type="button"
               onClick={onDismissDemoMode}
-              className="text-[#92400E]/70 hover:text-[#92400E] font-medium text-[11px] p-0.5"
+              className="text-[#1F2937]/70 hover:text-[#1F2937] font-medium text-[11px] p-0.5"
             >
               <X className="w-3.5 h-3.5" />
             </button>
@@ -495,9 +495,9 @@ export const ConversationDetail: React.FC<ConversationDetailProps> = ({
               {conversation.channel === 'whatsapp' ? (
                 <span
                   title="Canal WhatsApp Business"
-                  className="inline-flex items-center gap-1 text-[11px] font-semibold text-[#25D366] bg-[#25D366]/10 px-2 py-0.5 rounded-full border border-[#25D366]/20"
+                  className="inline-flex items-center gap-1 text-[11px] font-semibold text-[#1F2937] bg-[#1F2937]/10 px-2 py-0.5 rounded-full border border-[#1F2937]/20"
                 >
-                  <MessageCircle className="w-3 h-3 fill-[#25D366]/30" />
+                  <MessageCircle className="w-3 h-3 fill-[#1F2937]/30" />
                   <span>WhatsApp</span>
                 </span>
               ) : conversation.channel === 'web' ? (
@@ -686,15 +686,15 @@ export const ConversationDetail: React.FC<ConversationDetailProps> = ({
         <div className="max-w-[840px] mx-auto w-full space-y-2">
           {/* Alerts for Voice or Groq */}
           {groqAlert && (
-            <div className="p-2.5 rounded-xl bg-amber-50 border border-amber-200 text-[12px] text-amber-800 flex items-center justify-between">
+            <div className="p-2.5 rounded-xl bg-white border border-[#E5E7EB] text-[12px] text-[#1F2937] flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+                <AlertCircle className="w-4 h-4 text-[#1F2937] shrink-0" />
                 <span>{groqAlert}</span>
               </div>
               <button
                 type="button"
                 onClick={() => setGroqAlert(null)}
-                className="text-amber-600 hover:text-amber-800 p-0.5"
+                className="text-[#1F2937] hover:text-[#1F2937] p-0.5"
               >
                 <X className="w-3.5 h-3.5" />
               </button>
@@ -702,15 +702,15 @@ export const ConversationDetail: React.FC<ConversationDetailProps> = ({
           )}
 
           {groqError && (
-            <div className="p-2.5 rounded-xl bg-red-50 border border-red-200 text-[12px] text-red-700 flex items-center justify-between">
+            <div className="p-2.5 rounded-xl bg-white border border-[#E5E7EB] text-[12px] text-[#1F2937] flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
+                <AlertCircle className="w-4 h-4 text-[#1F2937] shrink-0" />
                 <span>{groqError}</span>
               </div>
               <button
                 type="button"
                 onClick={() => setGroqError(null)}
-                className="text-red-600 hover:text-red-800 p-0.5"
+                className="text-[#1F2937] hover:text-[#1F2937] p-0.5"
               >
                 <X className="w-3.5 h-3.5" />
               </button>
@@ -726,7 +726,7 @@ export const ConversationDetail: React.FC<ConversationDetailProps> = ({
             {voiceState === 'recording' && (
               <div className="px-4 py-2 bg-[#F4F4F5] border-b border-[#E4E4E7] flex items-center justify-between">
                 <div className="flex items-center gap-3">
-                  <span className="w-2.5 h-2.5 rounded-full bg-[#EF4444] animate-ping" />
+                  <span className="w-2.5 h-2.5 rounded-full bg-[#111827] animate-ping" />
                   <span className="text-[12px] font-semibold text-[#1E293B]">
                     Enregistrement en cours ({recordingSeconds}s)
                   </span>
@@ -748,7 +748,7 @@ export const ConversationDetail: React.FC<ConversationDetailProps> = ({
                     type="button"
                     onClick={handleValidateRecording}
                     title="Valider et transcrire avec Whisper"
-                    className="w-7 h-7 rounded-lg bg-[#10B981] hover:bg-emerald-600 flex items-center justify-center text-white transition-colors shadow-xs"
+                    className="w-7 h-7 rounded-lg bg-[#111827] hover:bg-[#111827] flex items-center justify-center text-white transition-colors shadow-xs"
                   >
                     <Check className="w-4 h-4 stroke-[2.5]" />
                   </button>
@@ -824,7 +824,7 @@ export const ConversationDetail: React.FC<ConversationDetailProps> = ({
                   title="Dicter avec Groq Whisper"
                   className={`w-10 h-10 rounded-full flex items-center justify-center transition-all duration-200 ${
                     voiceState === 'recording'
-                      ? 'bg-[#EF4444] text-white ring-4 ring-[#EF4444]/20 animate-pulse'
+                      ? 'bg-[#111827] text-white ring-4 ring-[#1F2937]/20 animate-pulse'
                       : 'bg-white border border-[#E2E8F0] text-[#64748B] hover:text-black hover:border-black hover:shadow-md'
                   }`}
                 >

@@ -14,7 +14,7 @@ try {
 } catch (e) {
   console.warn('[INIT] Firestore indisponible, fallback mémoire :', String((e && e.message) || e).slice(0, 200));
 }
-const memoryStore = { audit: [], tasks: [], agents: [], knowledge: [], conversations: [], integrations: [], wa_conversations: [], wa_events: [], user_signals: [], tool_calls: [], accounting_proposals: [], knowledgeChunks: {} };
+const memoryStore = { audit: [], tasks: [], agents: [], knowledge: [], conversations: [], integrations: [], wa_conversations: [], wa_events: [], user_signals: [], tool_calls: [], accounting_proposals: [], knowledgeChunks: {}, chat_uploads: {} };
 
 const app = express();
 
@@ -2540,14 +2540,71 @@ function sanitizeSessionBody(b) {
 function sanitizeChatMessage(m) {
   m = m || {};
   const sender = ['user', 'agent', 'system'].includes(m.sender) ? m.sender : 'user';
+  // Pièces jointes : seul le storagePath (chat/...) est persisté, jamais de binaire
+  // ni d'URL. Le binaire se lit via GET /api/chat/attachment (base64 borné).
+  let attachments = [];
+  if (Array.isArray(m.attachments)) {
+    attachments = m.attachments.slice(0, 5).map((a) => ({
+      name: str(a && a.name, 180) || 'fichier',
+      mimeType: str(a && a.mimeType, 100) || 'application/octet-stream',
+      size: Math.max(0, parseInt((a && a.size) || '0', 10) || 0),
+      storagePath: str(a && a.storagePath, 220),
+    })).filter((a) => a.storagePath && a.storagePath.startsWith('chat/') && !a.storagePath.includes('..'));
+  }
   return {
     sender,
     senderName: str(m.senderName, 80) || (sender === 'user' ? 'Vous' : 'DC Intelligence'),
     content: str(m.content, 8000),
     timestamp: str(m.timestamp, 40) || new Date().toISOString(),
     agentName: str(m.agentName, 120),
+    attachments,
   };
 }
+
+// --- Chat : upload + lecture de pièces jointes (images, PDF, documents) ---
+// POST /api/chat/upload { sessionId?, name, mimeType, base64 } -> { storagePath, name, mimeType, size }.
+// Stockage Firebase Storage (chat/<session>/<id>/<nom>) ; repli mémoire en dev.
+// GET /api/chat/attachment?path=chat/... -> { base64, mimeType, name } (8 Mo max,
+// même pattern que /api/knowledge/:id/download : pas d'URL signée à fuiter).
+app.post(['/api/chat/upload', '/chat/upload'], async (req, res) => {
+  if (!checkRateLimit(req, res, 10)) return;
+  const { sessionId, name, mimeType, base64 } = req.body || {};
+  const cleanName = str(name, 180).trim() || 'fichier';
+  if (!base64 || typeof base64 !== 'string' || base64.length < 10 || base64.length > 11_000_000) {
+    return res.status(400).json({ error: 'base64 requis (fichier <= ~8mb)' });
+  }
+  const buf = Buffer.from(base64, 'base64');
+  if (!buf.length || buf.length > 8_000_000) return res.status(400).json({ error: 'fichier invalide ou trop volumineux (max 8mb)' });
+  const mime = str(mimeType, 100) || 'application/octet-stream';
+  const supported = /^(image\/(png|jpeg|webp|gif)|application\/pdf|text\/(plain|csv)|application\/(msword|vnd\.ms-excel|vnd\.openxmlformats-officedocument\.(wordprocessingml\.document|spreadsheetml\.sheet)|json))/.test(mime);
+  if (!supported) return res.status(400).json({ error: 'type de fichier non supporté' });
+  const id = `att-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  const sid = str(sessionId, 80).replace(/[^a-zA-Z0-9_-]/g, '') || 'tmp';
+  const safeName = cleanName.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 120) || 'fichier';
+  const storagePath = `chat/${sid}/${id}/${safeName}`;
+  try {
+    await storageBucket().file(storagePath).save(buf, { metadata: { contentType: mime } });
+  } catch (e) {
+    // Repli mémoire (dev sans bucket) : servi par GET /api/chat/attachment.
+    memoryStore.chat_uploads[storagePath] = { base64: buf.toString('base64'), mimeType: mime, name: cleanName, size: buf.length };
+  }
+  return res.status(200).json({ ok: true, storagePath, name: cleanName, mimeType: mime, size: buf.length });
+});
+
+app.get(['/api/chat/attachment', '/chat/attachment'], async (req, res) => {
+  if (!checkRateLimit(req, res, 30)) return;
+  const p = str(req.query.path, 220);
+  if (!p || !p.startsWith('chat/') || p.includes('..')) return res.status(400).json({ error: 'path invalide' });
+  try {
+    const [buf] = await storageBucket().file(p).download();
+    if (!buf.length || buf.length > 8_000_000) return res.status(502).json({ error: 'fichier illisible' });
+    return res.status(200).json({ ok: true, base64: buf.toString('base64') });
+  } catch (e) {
+    const mem = (memoryStore.chat_uploads || {})[p];
+    if (mem) return res.status(200).json({ ok: true, base64: mem.base64, mimeType: mem.mimeType, name: mem.name });
+    return res.status(404).json({ error: 'pièce jointe introuvable' });
+  }
+});
 
 app.get(['/api/conversations', '/conversations'], async (req, res) => {
   if (!checkRateLimit(req, res, 60)) return;

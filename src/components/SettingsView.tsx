@@ -480,7 +480,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                               <span className="font-bold text-[13px] text-[#09090B]">{m.name}</span>
                               {isSelected && (
                                 <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-[#09090B] text-white shadow-xs">
-                                  <Check className="w-3 h-3 text-emerald-400" />
+                                  <Check className="w-3 h-3 text-white" />
                                   <span>Sélectionné</span>
                                 </span>
                               )}
@@ -503,8 +503,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
                           <td className="px-4 py-3">
                             {isSelected ? (
-                              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-100 text-emerald-800 border border-emerald-200">
-                                <span className="w-1.5 h-1.5 rounded-full bg-emerald-600" />
+                              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-semibold bg-[#F3F4F6] text-[#1F2937] border border-[#E5E7EB]">
+                                <span className="w-1.5 h-1.5 rounded-full bg-[#111827]" />
                                 <span>Actif en session</span>
                               </span>
                             ) : (

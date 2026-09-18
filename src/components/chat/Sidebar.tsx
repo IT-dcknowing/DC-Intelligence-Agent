@@ -3,7 +3,7 @@ import { Search, Plus, MessageSquare, Trash2, Edit2, Settings, ChevronLeft } fro
 import type { ChatSession } from '../../types';
 
 /**
- * Sidebar — Claude style, Noir & Blanc
+ * Sidebar — Editorial style, Noir & Blanc
  * 260-280px, #FAFAFA, hover #F0F0EE, active #EBEBE9 SANS bordure
  * Inter 14px, transitions 0.15s, header DC + Nouvelle analyse
  * Design decision : sidebar très épurée, pas de lourdeur, focus sur la liste
@@ -159,7 +159,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                         setEditingId(s.id);
                         setEditingTitle(s.title);
                       }}
-                      className="p-1 rounded hover:bg-white"
+                      className="p-1 rounded hover:bg-[#F3F4F6]"
                       aria-label="Renommer"
                     >
                       <Edit2 style={{ width: 12, height: 12 }} />
@@ -169,7 +169,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                         e.stopPropagation();
                         onDelete(s.id);
                       }}
-                      className="p-1 rounded hover:bg-white hover:text-red-600"
+                      className="p-1 rounded hover:bg-[#F3F4F6] hover:text-[#111827]"
                       aria-label="Supprimer"
                     >
                       <Trash2 style={{ width: 12, height: 12 }} />

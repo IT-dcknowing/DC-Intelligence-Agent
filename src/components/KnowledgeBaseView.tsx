@@ -291,7 +291,7 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
                   type="button"
                   onClick={() => onDeleteDocument(selectedDoc.id)}
                   title="Supprimer ce document (fichier + métadonnées)"
-                  className="px-4 py-2.5 rounded-xl border border-[#E2E8F0] hover:border-red-400 hover:text-red-600 text-[#475569] text-[13px] font-semibold flex items-center gap-2 transition-colors"
+                  className="px-4 py-2.5 rounded-xl border border-[#E2E8F0] hover:border-[#111827] hover:text-[#111827] text-[#475569] text-[13px] font-semibold flex items-center gap-2 transition-colors"
                 >
                   <Trash2 className="w-4 h-4" />
                   <span>Supprimer</span>
@@ -412,7 +412,7 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
               className={`p-6 border-2 border-dashed rounded-2xl flex flex-col items-center justify-center text-center transition-all ${
                 isDragOver
                   ? 'border-black bg-[#F4F4F5]'
-                  : 'border-[#CBD5E1] bg-[#F8FAFC] hover:border-[#94A3B8]'
+                  : 'border-[#E5E7EB] bg-[#F8FAFC] hover:border-[#94A3B8]'
               }`}
             >
               <UploadCloud className="w-9 h-9 text-[#64748B] mb-2 stroke-[1.75]" />

@@ -78,9 +78,9 @@ export const ConversationList: React.FC<ConversationListProps> = ({
         return (
           <span
             title="Canal WhatsApp Business"
-            className="inline-flex items-center gap-1 text-[11px] font-semibold text-[#25D366]"
+            className="inline-flex items-center gap-1 text-[11px] font-semibold text-[#1F2937]"
           >
-            <MessageCircle className="w-3.5 h-3.5 stroke-[2.2] fill-[#25D366]/20" />
+            <MessageCircle className="w-3.5 h-3.5 stroke-[2.2] fill-[#1F2937]/10" />
           </span>
         );
       case 'web':
@@ -101,13 +101,13 @@ export const ConversationList: React.FC<ConversationListProps> = ({
   const getStatusColor = (status: ConversationStatus) => {
     switch (status) {
       case 'en_cours':
-        return 'bg-[#10B981]';
+        return 'bg-[#111827]';
       case 'escaladee':
-        return 'bg-[#F59E0B]';
+        return 'bg-[#6B7280]';
       case 'terminee':
-        return 'bg-[#94A3B8]';
+        return 'bg-[#D1D5DB]';
       case 'fermee':
-        return 'bg-[#94A3B8]';
+        return 'bg-[#D1D5DB]';
     }
   };
 
@@ -248,7 +248,7 @@ export const ConversationList: React.FC<ConversationListProps> = ({
                     onClose();
                     onOpenWhatsAppConnect();
                   }}
-                  className="mt-4 px-4 py-2 rounded-xl text-[13px] font-semibold bg-[#25D366] hover:bg-emerald-600 text-white flex items-center gap-2 transition-all shadow-sm"
+                  className="mt-4 px-4 py-2 rounded-xl text-[13px] font-semibold bg-[#1F2937] hover:bg-[#1F2937] text-white flex items-center gap-2 transition-all shadow-sm"
                 >
                   <MessageCircle className="w-4 h-4 fill-white/20" />
                   <span>Connecter WhatsApp</span>

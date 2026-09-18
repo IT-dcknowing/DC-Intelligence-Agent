@@ -150,16 +150,16 @@ export const TaskMonitorView: React.FC = () => {
               </h1>
               {activeVolet === 'whatsapp' ? (
                 waOnline === false ? (
-                  <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-zinc-100 text-zinc-600 border border-zinc-200">
+                  <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-white text-[#6B7280] border border-[#E5E7EB]">
                     Hors ligne — backend injoignable
                   </span>
                 ) : (
-                  <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">
+                  <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-[#F3F4F6] text-[#1F2937] border border-[#E5E7EB]">
                     API Live Meta v26.0
                   </span>
                 )
               ) : (
-                <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">
+                <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-[#F3F4F6] text-[#1F2937] border border-[#E5E7EB]">
                   API Live Meta v26.0
                 </span>
               )}
@@ -227,7 +227,7 @@ export const TaskMonitorView: React.FC = () => {
 
             <div className="flex flex-wrap items-center gap-4 pt-1">
               <div className="flex items-center gap-2">
-                <Phone className="w-5 h-5 text-emerald-600" />
+                <Phone className="w-5 h-5 text-[#1F2937]" />
                 <span className="text-[17px] font-bold text-[#1E293B] font-mono">
                   {waPhone.number}
                 </span>
@@ -235,13 +235,13 @@ export const TaskMonitorView: React.FC = () => {
 
               {!!waPhone.verifiedName && (
                 <div className="flex items-center gap-1.5 text-[13px] font-semibold text-[#1E293B]">
-                  <CheckCircle2 className="w-4 h-4 text-blue-600" />
+                  <CheckCircle2 className="w-4 h-4 text-[#1F2937]" />
                   <span>{waPhone.verifiedName}</span>
                 </div>
               )}
 
-              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
-                <span className="w-2 h-2 rounded-full bg-emerald-600 animate-pulse" />
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-bold bg-[#F3F4F6] text-[#1F2937] border border-[#E5E7EB]">
+                <span className="w-2 h-2 rounded-full bg-[#111827] animate-pulse" />
                 Qualité {waPhone.quality}
               </span>
 
@@ -282,7 +282,7 @@ export const TaskMonitorView: React.FC = () => {
             </div>
 
             <div className="bg-white p-4 rounded-xl border border-[#E2E8F0] shadow-xs">
-              <div className="text-[10px] font-bold text-[#64748B] uppercase tracking-wider text-amber-700">
+              <div className="text-[10px] font-bold text-[#64748B] uppercase tracking-wider text-[#6B7280]">
                 ÉCHECS
               </div>
               <div className="text-2xl font-bold text-[#1E293B] mt-1">{waStats.failed}</div>
@@ -330,7 +330,7 @@ export const TaskMonitorView: React.FC = () => {
 
                       <div className="flex items-center gap-3 text-[12px] text-[#64748B]">
                         <span>{conv.subject}</span>
-                        <span className="px-2 py-0.5 rounded bg-zinc-100 font-mono text-[10px] font-bold text-zinc-800 uppercase">
+                        <span className="px-2 py-0.5 rounded bg-white font-mono text-[10px] font-bold text-[#1F2937] uppercase">
                           {conv.intent}
                         </span>
                         <span>{conv.messageCount} msg</span>
@@ -351,8 +351,8 @@ export const TaskMonitorView: React.FC = () => {
                             key={idx}
                             className={`p-3.5 rounded-xl text-[12.5px] leading-relaxed max-w-3xl ${
                               m.sender === 'user'
-                                ? 'bg-zinc-100 text-zinc-900 ml-auto border border-zinc-200'
-                                : 'bg-[#EEF2FF] text-[#1E1B4B] border border-[#C7D2FE]'
+                                ? 'bg-[#F9FAFB] text-[#1F2937] ml-auto border border-[#E5E7EB]'
+                                : 'bg-[#111827] text-white border border-[#111827]'
                             }`}
                           >
                             <div className="text-[10px] font-bold mb-1 opacity-70 flex justify-between">

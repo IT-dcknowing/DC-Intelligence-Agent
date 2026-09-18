@@ -1,7 +1,7 @@
 import React from 'react';
 
 /**
- * TypingIndicator — Claude 3 points rebondissants + pulse
+ * TypingIndicator — Editorial 3 points rebondissants + pulse
  * Réutilisable pour "IA en train d'écrire"
  * Design : 3 dots #9CA3AF, 6px, bounce 1.4s, delays -0.32 / -0.16
  */

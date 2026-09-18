@@ -292,13 +292,13 @@ export const AgentDetail: React.FC<AgentDetailProps> = ({ agent, onUpdateAgent }
         {isEntry && (
           <div
             className="flex items-start gap-3 p-4 rounded-xl"
-            style={{ background: '#FFFBEB', border: '1px solid #FDE68A' }}
+            style={{ background: '#F9FAFB', border: '1px solid #E5E7EB' }}
           >
             <div className="flex-1">
-              <p style={{ fontSize: '13px', fontWeight: 600, color: '#92400E' }}>
+              <p style={{ fontSize: '13px', fontWeight: 600, color: '#111827' }}>
                 Protège l’identité de l’Accueil
               </p>
-              <p style={{ fontSize: '12px', color: '#A16207', marginTop: '2px', lineHeight: 1.6 }}>
+              <p style={{ fontSize: '12px', color: '#6B7280', marginTop: '2px', lineHeight: 1.6 }}>
                 Restaure le Prompt Système canonique (Accueillir, Qualifier, Router, Rassurer). L’Accueil ne doit jamais contenir d’imputation comptable ni de SYSCOHADA.
               </p>
             </div>
@@ -306,7 +306,7 @@ export const AgentDetail: React.FC<AgentDetailProps> = ({ agent, onUpdateAgent }
               type="button"
               onClick={handleResetAccueil}
               className="flex items-center gap-1.5 cursor-pointer shrink-0"
-              style={{ padding: '7px 13px', background: '#fff', border: '1px solid #F59E0B', borderRadius: '8px', fontSize: '12px', fontWeight: 600, color: '#92400E' }}
+              style={{ padding: '7px 13px', background: '#fff', border: '1px solid #E5E7EB', borderRadius: '8px', fontSize: '12px', fontWeight: 600, color: '#111827' }}
             >
               <RotateCcw style={{ width: 13, height: 13 }} />
               <span>Réinitialiser le prompt</span>
