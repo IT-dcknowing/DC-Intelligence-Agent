@@ -1126,7 +1126,9 @@ function googleConnRef(uid, integration) {
 
 // Étape 1 : URL d'autorisation Google (le front ouvre la popup vers cette URL).
 // Fonction pure (testable) : ne touche ni Firestore ni le réseau.
-function buildGoogleAuthUrl(integration) {
+// FIX ReferenceError: `req` n'existe pas dans cette fonction pure — l'origine
+// est passée en paramètre par la route (était `req.query.origin` inline).
+function buildGoogleAuthUrl(integration, origin) {
   if (!GOOGLE_OAUTH_SCOPES[integration]) {
     throw Object.assign(new Error('integration inconnue (google-sheets | google-docs)'), { status: 400 });
   }
@@ -1136,7 +1138,7 @@ function buildGoogleAuthUrl(integration) {
       access_type: 'offline', // indispensable : délivre le refresh_token permanent
       prompt: 'consent', // force le consentement -> garantit un refresh_token à chaque connexion
       scope: GOOGLE_OAUTH_SCOPES[integration],
-      state: encodeOAuthState(integration, req.query.origin),
+      state: encodeOAuthState(integration, origin),
       redirect_uri: redirectUri,
     });
     return { url, redirectUri };
@@ -1146,7 +1148,7 @@ app.get(['/api/google/auth-url', '/google/auth-url'], async (req, res) => {
   if (!checkRateLimit(req, res, 10)) return;
   const integration = String(req.query.integration || 'google-sheets');
   try {
-    const { url, redirectUri } = buildGoogleAuthUrl(integration);
+    const { url, redirectUri } = buildGoogleAuthUrl(integration, req.query.origin);
     return res.status(200).json({ ok: true, url, redirectUri });
   } catch (e) {
     const msg = String((e && e.message) || 'oauth_unavailable');
@@ -3596,7 +3598,13 @@ app.all(['/api/*', '/webhook/*'], (req, res) => {
   return res.status(404).json({ error: 'not_found', path: req.path });
 });
 
-exports.whatsappWebhook = functions.https.onRequest(app);
+// Runtime durci : timeout 300 s (chaînes lf_ask 60 s + compositions + VLM),
+// 512 MiB (pdf-parse + buffers base64 8 Mo), maxInstances 20 (borne anti-emballement
+// WhatsApp × retries Meta × OpenRouter = facture), région explicite.
+exports.whatsappWebhook = functions.https.onRequest(
+  { region: 'us-central1', timeoutSeconds: 300, maxInstances: 20, memory: '512MiB' },
+  app
+);
 
 // Exportés pour tests locaux uniquement (aucun effet en prod).
 exports.__testUtils = { withTimeout, withDb, fetchUpstream, encodeOAuthState, decodeOAuthState, buildGoogleAuthUrl, GOOGLE_OAUTH_SCOPES, paramsHash, shouldEscalateClarification, computeHallucinations, chunkText, cosineSim, parseLfAsk, classifyIntentBackend, validateComptaProposalBackend, extractIndexableText, mcpDispatch, MCP_SERVER_TOOLS };
