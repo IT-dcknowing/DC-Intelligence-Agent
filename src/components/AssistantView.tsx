@@ -40,6 +40,9 @@ import { InputArea as ChatInputArea } from './chat/InputArea';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
+// Performance Optimization (Bolt ⚡): Hoisted remarkPlugins array to module scope
+const REMARK_PLUGINS = [remarkGfm];
+
 /**
  * Pièce jointe rendue selon le type MIME réel (image / pdf / fichier).
  * Source : blob local immédiat > miniature > fetch backend (Storage via base64).
@@ -904,7 +907,7 @@ export const AssistantView: React.FC<AssistantViewProps> = ({
                           {isUser ? (
                             <span style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{msg.content}</span>
                           ) : (
-                            <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
+                            <ReactMarkdown remarkPlugins={REMARK_PLUGINS}>{msg.content}</ReactMarkdown>
                           )}
                         </div>
                       )}
