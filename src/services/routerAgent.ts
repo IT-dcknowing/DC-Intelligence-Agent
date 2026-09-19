@@ -44,11 +44,17 @@ export function routeUserRequest(
   }
 
   // 2. Analyse textuelle directe par mots-clés & intentions (matrice refonte §6)
-  const text = (userQuery || '').toLowerCase();
+  // Normalisation NFD (sans accents) : \b est ASCII-only en JS, les frontières
+  // autour des mots accentués (relevé, écart, échéance...) ne matchent jamais
+  // sinon. Les patterns ci-dessous sont donc volontairement SANS accents.
+  const text = (userQuery || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
 
   // Demande d'humain explicite -> escalade (jamais « je n'ai pas accès »)
   if (
-    /\b(humain|humaine|conseiller|conseillère|conseillere|agent humain|vraie personne|vrai personne|personne réelle|être humain)\b/.test(
+    /\b(humain|humaine|conseiller|conseillere|agent humain|vraie personne|vrai personne|personne reelle|etre humain)\b/.test(
       text
     )
   ) {
@@ -67,7 +73,7 @@ export function routeUserRequest(
   // Doit passer AVANT compta : une question sur obligations déclaratives RSI, sanctions art.224/225 CGI
   // ou Code du Travail ne doit jamais aller vers compta même si elle contient "TVA/vente".
   if (
-    /\b(cgi|code\s+général\s+des\s+impôts|livre\s+de\s+proc[eé]dure|article\s*\d+|art\.\s*\d+|sanction|pénalit|penalit|obligation|d[eé]claration|d[eé]clarative|échéance|echeance|code\s+du\s+travail)\b/.test(
+    /\b(cgi|code\s+general\s+des\s+impots|livre\s+de\s+procedure|article\s*\d+|art\.\s*\d+|sanction|penalit|obligation|declaration|declarative|echeance|code\s+du\s+travail)\b/.test(
       text
     )
   ) {
@@ -93,7 +99,7 @@ export function routeUserRequest(
 
   // Domaine Juridique & Fiscal général (« Legal Flow » route vers legal, jamais « pas d'accès »)
   if (
-    /legal[\s_-]*flow|legalflow|\b(contentieux|conformité|conformite|fiscal|dgi|impôt|impot|statuts|contrat|bail|das|cnps|patente|airsi|retenue|télédéclaration|e-impots|juridique)\b/.test(
+    /legal[\s_-]*flow|legalflow|\b(contentieux|conformite|fiscal|dgi|impot|statuts|contrat|bail|das|cnps|patente|airsi|retenue|teledeclaration|e-impots|juridique)\b/.test(
       text
     )
   ) {
@@ -108,7 +114,7 @@ export function routeUserRequest(
 
   // Domaine Rapprochement
   if (
-    /\b(rapprochement|relevé|releve|banque|ecobank|sgbci|bicici|pointage|solde|521|écart|ecart)\b/.test(
+    /\b(rapprochement|releve|banque|ecobank|sgbci|bicici|pointage|solde|521|ecart)\b/.test(
       text
     )
   ) {
@@ -124,7 +130,7 @@ export function routeUserRequest(
   // Domaine Comptabilité (« agent comptable » doit router explicitement, pas par défaut)
   // Retiré tva/vente/ttc trop génériques qui capturaient les questions fiscales ; gardé les termes strictement comptables
   if (
-    /\b(compta|comptables?|facture|écriture|ecriture|syscohada|ht|ttc|601|401|411|achat|journal|imputation|bilan|balance|grand\s+livre)\b/.test(
+    /\b(compta|comptables?|facture|ecriture|syscohada|ht|ttc|601|401|411|achat|journal|imputation|bilan|balance|grand\s+livre)\b/.test(
       text
     )
   ) {
@@ -140,7 +146,7 @@ export function routeUserRequest(
   }
 
   // Cas spécifique : TVA seule ("distinction TVA vente/prestation") → juridique si mention vente/prestation fiscal
-  if (/\btva\b/.test(text) && /\b(vente|prestation|collectée|déductible|exonération)\b/.test(text) && !/\b(écriture|imputation|journal|601|401)\b/.test(text)) {
+  if (/\btva\b/.test(text) && /\b(vente|prestation|collectee|deductible|exoneration)\b/.test(text) && !/\b(ecriture|imputation|journal|601|401)\b/.test(text)) {
     return {
       domain: 'JURIDIQUE_FISCAL',
       targetAgentId: 'agent-3',

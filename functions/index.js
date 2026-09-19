@@ -2122,18 +2122,21 @@ app.post(['/api/chat', '/chat'], async (req, res) => {
 // Le front web garde sa version TS (logique identique, contrainte : front inchangé).
 // agents backend : 'compta' | 'legal' | 'reco' | 'accueil' | 'humain'.
 function classifyIntentBackend(text, docType, confidence) {
-  const t = String(text || '').toLowerCase();
+  // Normalisation NFD (sans accents) : \b est ASCII-only en JS, les frontières
+  // autour des mots accentués (relevé, écart, échéance...) ne matchent jamais
+  // sinon. Miroir EXACT de routerAgent.ts (front) — patterns SANS accents.
+  const t = String(text || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
   const conf = Number.isFinite(Number(confidence)) ? Number(confidence) : 0.6;
   // 1. Multimodal d'abord (comme le front).
   if (docType === 'invoice') return { domain: 'COMPTABILITÉ', agent: 'compta', confidence: conf };
   if (docType === 'tax_notice' || docType === 'legal_contract') return { domain: 'JURIDIQUE_FISCAL', agent: 'legal', confidence: conf };
   if (docType === 'bank_statement') return { domain: 'RAPPROCHEMENT', agent: 'reco', confidence: conf };
   // 2. Humain explicite.
-  if (/\b(humain|humaine|conseiller|conseillère|conseillere|agent humain|vraie personne|vrai personne|personne réelle|être humain)\b/.test(t)) {
+  if (/\b(humain|humaine|conseiller|conseillere|agent humain|vraie personne|vrai personne|personne reelle|etre humain)\b/.test(t)) {
     return { domain: 'HUMAIN', agent: 'humain', confidence: 0.9 };
   }
   // 3. Juridique PRIORITAIRE (avant compta).
-  if (/\b(cgi|code\s+général\s+des\s+impôts|livre\s+de\s+proc[eé]dure|article\s*\d+|art\.\s*\d+|sanction|pénalit|penalit|obligation|d[eé]claration|d[eé]clarative|échéance|echeance|code\s+du\s+travail)\b/.test(t)) {
+  if (/\b(cgi|code\s+general\s+des\s+impots|livre\s+de\s+procedure|article\s*\d+|art\.\s*\d+|sanction|penalit|obligation|declaration|declarative|echeance|code\s+du\s+travail)\b/.test(t)) {
     return { domain: 'JURIDIQUE_FISCAL', agent: 'legal', confidence: 0.93 };
   }
   // 4. Sigles fiscaux.
@@ -2141,19 +2144,19 @@ function classifyIntentBackend(text, docType, confidence) {
     return { domain: 'JURIDIQUE_FISCAL', agent: 'legal', confidence: 0.85 };
   }
   // 5. Juridique général.
-  if (/legal[\s_-]*flow|legalflow|\b(contentieux|conformité|conformite|fiscal|dgi|impôt|impot|statuts|contrat|bail|das|cnps|patente|airsi|retenue|télédéclaration|e-impots|juridique)\b/.test(t)) {
+  if (/legal[\s_-]*flow|legalflow|\b(contentieux|conformite|fiscal|dgi|impot|statuts|contrat|bail|das|cnps|patente|airsi|retenue|teledeclaration|e-impots|juridique)\b/.test(t)) {
     return { domain: 'JURIDIQUE_FISCAL', agent: 'legal', confidence: 0.9 };
   }
   // 6. Rapprochement.
-  if (/\b(rapprochement|relevé|releve|banque|ecobank|sgbci|bicici|pointage|solde|521|écart|ecart)\b/.test(t)) {
+  if (/\b(rapprochement|releve|banque|ecobank|sgbci|bicici|pointage|solde|521|ecart)\b/.test(t)) {
     return { domain: 'RAPPROCHEMENT', agent: 'reco', confidence: 0.9 };
   }
   // 7. Comptabilité stricte (tva/vente/ttc génériques exclus, comme le front).
-  if (/\b(compta|comptables?|facture|écriture|ecriture|syscohada|ht|ttc|601|401|411|achat|journal|imputation|bilan|balance|grand\s+livre)\b/.test(t)) {
+  if (/\b(compta|comptables?|facture|ecriture|syscohada|ht|ttc|601|401|411|achat|journal|imputation|bilan|balance|grand\s+livre)\b/.test(t)) {
     return { domain: 'COMPTABILITÉ', agent: 'compta', confidence: 0.9 };
   }
   // 8. TVA seule à caractère fiscal.
-  if (/\btva\b/.test(t) && /\b(vente|prestation|collectée|déductible|exonération)\b/.test(t) && !/\b(écriture|imputation|journal|601|401)\b/.test(t)) {
+  if (/\btva\b/.test(t) && /\b(vente|prestation|collectee|deductible|exoneration)\b/.test(t) && !/\b(ecriture|imputation|journal|601|401)\b/.test(t)) {
     return { domain: 'JURIDIQUE_FISCAL', agent: 'legal', confidence: 0.82 };
   }
   // 9. Vague.
