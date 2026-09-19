@@ -872,6 +872,15 @@ export const AssistantView: React.FC<AssistantViewProps> = ({
                       <span style={{ fontWeight: 500, color: isUser ? '#9CA3AF' : '#6B6B6B' }}>{msg.senderName}</span>
                       <span>•</span>
                       <span>{msg.timestamp}</span>
+                      {!isUser && msg.toolTrace && msg.toolTrace.length > 0 && (
+                        <span
+                          title={msg.toolTrace.map((t) => `${t.tool} (${t.ok ? 'ok' : 'échec'})`).join(', ')}
+                          style={{ fontSize: '10px', color: '#9CA3AF', fontWeight: 500 }}
+                        >
+                          • 🛠 {msg.toolTrace.length} outil{msg.toolTrace.length > 1 ? 's' : ''} :{' '}
+                          {msg.toolTrace.map((t) => t.tool.split('.').pop()).join(', ')}
+                        </span>
+                      )}
                     </div>
 
                     <div

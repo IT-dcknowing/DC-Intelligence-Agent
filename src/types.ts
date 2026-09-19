@@ -102,6 +102,8 @@ export interface ChatMessage {
   attachments?: ChatAttachment[];
   // Streaming token-par-token en cours (§1.3) : curseur affiché, pas de dots.
   streaming?: boolean;
+  // Trace d'outils du registre exécutés pour produire ce message (local uniquement).
+  toolTrace?: Array<{ tool: string; ok: boolean }>;
 }
 
 export interface ChatSession {

@@ -234,6 +234,17 @@ export interface GenerateChatParams {
   signal?: AbortSignal;
   // Délai max d'attente du PREMIER token en streaming (défaut 20 s, §5.1).
   firstTokenTimeoutMs?: number;
+  // Tool Registry natif : l'agent demande, le backend exécute (boucle agentique).
+  // agentId = id agent (manifest), tools 'auto' ou noms explicites.
+  agentId?: string;
+  tools?: 'auto' | string[];
+  // Trace d'exécution reçue (événement SSE tool_trace ou JSON) : [{tool, ok}].
+  onTrace?: (trace: Array<{ tool: string; ok: boolean }>) => void;
+}
+
+export interface ToolTraceItem {
+  tool: string;
+  ok: boolean;
 }
 
 export async function generateChatResponse(params: GenerateChatParams): Promise<string> {
@@ -243,6 +254,9 @@ export async function generateChatResponse(params: GenerateChatParams): Promise<
   // Le backend lit ton .env racine (OPENROUTER_API_KEY). Si dispo, on l'utilise en priorité.
   const specialistContext = params.specialistContext;
   const hasImages = Boolean(params.images && params.images.length > 0);
+  if ((params.tools === 'auto' || (Array.isArray(params.tools) && params.tools.length)) && !params.agentId) {
+    console.warn('[LLM] tools demandés sans agentId : manifest restreint appliqué côté backend.');
+  }
   try {
     const proxied = await callBackendChat(model.id, conversationHistory, userMessage, reasoningEffort, agentContext, specialistContext, 0, {
       stream: params.stream,
@@ -251,6 +265,9 @@ export async function generateChatResponse(params: GenerateChatParams): Promise<
       images: params.images,
       hasImages,
       firstTokenTimeoutMs: params.firstTokenTimeoutMs,
+      agentId: params.agentId,
+      tools: params.tools,
+      onTrace: params.onTrace,
     });
     if (proxied) return proxied;
   } catch (e: any) {
@@ -261,7 +278,11 @@ export async function generateChatResponse(params: GenerateChatParams): Promise<
     }
   }
 
-  // 1. Fallback direct (dev / clé saisie dans Paramètres).
+  // 1. Fallback direct (dev / clé saisie dans Paramètres). Les outils du registre
+  // sont backend-only : ignorés ici avec avertissement explicite (pas de silencieux).
+  if (params.tools === 'auto' || (Array.isArray(params.tools) && params.tools.length)) {
+    console.warn('[LLM] outils du registre ignorés en voie directe (backend indisponible) : réponse sans actions.');
+  }
   const openRouterKey = apiKeys.find((k) => k.provider === 'openrouter')?.key?.trim();
   const anthropicKey = apiKeys.find((k) => k.provider === 'anthropic')?.key?.trim();
   const deepseekKey = apiKeys.find((k) => k.provider === 'deepseek')?.key?.trim();
@@ -436,6 +457,10 @@ export interface BackendChatStreamOpts {
   hasImages?: boolean;
   firstTokenTimeoutMs?: number;
   maxTokens?: number;
+  // Tool Registry natif : transmis tels quels au backend (agentId + tools).
+  agentId?: string;
+  tools?: 'auto' | string[];
+  onTrace?: (trace: ToolTraceItem[]) => void;
 }
 
 async function callBackendChat(
@@ -472,6 +497,8 @@ async function callBackendChat(
         temperature: 0.3,
         max_tokens: opts?.maxTokens || 3500,
         ...(opts?.images?.length ? { attachmentPaths: opts.images } : {}),
+        ...(opts?.agentId ? { agentId: opts.agentId } : {}),
+        ...(opts?.tools ? { tools: opts.tools } : {}),
       }),
     });
   } catch (e: any) {
@@ -503,6 +530,9 @@ async function callBackendChat(
   }
   const reply = String((data as any)?.reply || '');
   if (!reply) throw new Error('backend_empty_reply');
+  if (Array.isArray((data as any)?.tool_trace) && opts?.onTrace) {
+    try { opts.onTrace((data as any).tool_trace); } catch {}
+  }
   return reply;
 }
 
@@ -531,6 +561,8 @@ async function streamBackendChat(
         max_tokens: opts.maxTokens || 3500,
         stream: true,
         ...(opts.images?.length ? { attachmentPaths: opts.images } : {}),
+        ...(opts.agentId ? { agentId: opts.agentId } : {}),
+        ...(opts.tools ? { tools: opts.tools } : {}),
       }),
     });
   } catch (e: any) {
@@ -548,6 +580,9 @@ async function streamBackendChat(
     if (!res.ok) throw new Error(`backend_${res.status}: ${String((data as any)?.detail || (data as any)?.error || res.statusText).slice(0, 300)}`);
     const reply = String((data as any)?.reply || '');
     if (!reply) throw new Error('backend_empty_reply');
+    if (Array.isArray((data as any)?.tool_trace) && opts.onTrace) {
+      try { opts.onTrace((data as any).tool_trace); } catch {}
+    }
     onToken(reply);
     return reply;
   }
@@ -582,6 +617,10 @@ async function streamBackendChat(
             const obj = JSON.parse(payload);
             if (obj && typeof obj.error === 'string' && obj.error) {
               throw new Error(`backend_stream_error: ${obj.error.slice(0, 300)}`);
+            }
+            if (obj && Array.isArray(obj.tool_trace) && opts.onTrace) {
+              try { opts.onTrace(obj.tool_trace); } catch {}
+              continue;
             }
             const content = obj && typeof obj.content === 'string' ? obj.content : '';
             if (content) {

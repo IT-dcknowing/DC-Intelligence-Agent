@@ -1029,6 +1029,23 @@ export default function App() {
             : s
         )
       );
+      // Trace d'outils du registre (remplie via onTrace pendant le stream).
+      let agentToolTrace: Array<{ tool: string; ok: boolean }> = [];
+      const patchAiTrace = (trace: Array<{ tool: string; ok: boolean }>) => {
+        agentToolTrace = trace;
+        setChatSessions((prev) =>
+          prev.map((s) =>
+            s.id === sessionId
+              ? {
+                  ...s,
+                  messages: s.messages.map((m) =>
+                    m.id === aiMsgId ? { ...m, toolTrace: trace } : m
+                  ),
+                }
+              : s
+          )
+        );
+      };
       const finalizeStream = (content: string) => {
         setChatSessions((prev) =>
           prev.map((s) =>
@@ -1038,7 +1055,9 @@ export default function App() {
                   lastMessage: content.slice(0, 80) + (content.length > 80 ? '...' : ''),
                   lastMessageTime: stampNow(),
                   messages: s.messages.map((m) =>
-                    m.id === aiMsgId ? { ...m, content, streaming: false } : m
+                    m.id === aiMsgId
+                      ? { ...m, content, streaming: false, toolTrace: agentToolTrace.length ? agentToolTrace : undefined }
+                      : m
                   ),
                 }
               : s
@@ -1071,6 +1090,10 @@ export default function App() {
         onToken: appendToken,
         signal: streamCtrl.signal,
         firstTokenTimeoutMs: 20000,
+        // Registre natif : l'agent exécutant demande, le backend exécute.
+        agentId: facilitatingAgent.id,
+        tools: 'auto',
+        onTrace: patchAiTrace,
       });
       // Finalise la bulle (streamée token-par-token, ou posée d'un bloc en repli).
       finalizeStream(aiResponseContent);

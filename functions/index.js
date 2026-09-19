@@ -225,7 +225,7 @@ async function fetchUpstream(url, options, label) {
   throw new Error((label || 'upstream') + '_unreachable');
 }
 
-async function openRouterChat({ model, messages, temperature, maxTokens, title }) {
+async function openRouterChat({ model, messages, temperature, maxTokens, title, tools, raw }) {
   const apiKey = (process.env.OPENROUTER_API_KEY || '').trim();
   if (!apiKey) {
     const e = new Error('backend_not_configured: OPENROUTER_API_KEY manquant');
@@ -233,10 +233,16 @@ async function openRouterChat({ model, messages, temperature, maxTokens, title }
     throw e;
   }
   const clean = (messages || [])
-    .filter((m) => m && (m.role === 'system' || m.role === 'user' || m.role === 'assistant'))
+    .filter((m) => m && (m.role === 'system' || m.role === 'user' || m.role === 'assistant' || m.role === 'tool'))
     .map((m) => {
-      if (typeof m.content === 'string') return { role: m.role, content: m.content.slice(0, 8000) };
-      return { role: m.role, content: m.content }; // contenu vision structuré (déjà borné)
+      const out = { role: m.role };
+      if (typeof m.content === 'string') out.content = m.content.slice(0, 8000);
+      else if (m.content != null) out.content = m.content; // contenu vision structuré (déjà borné)
+      else out.content = '';
+      if (m.tool_calls) out.tool_calls = m.tool_calls;
+      if (m.tool_call_id) out.tool_call_id = m.tool_call_id;
+      if (m.name) out.name = String(m.name).slice(0, 64);
+      return out;
     })
     .slice(-12);
   if (!clean.length) throw Object.assign(new Error('messages invalides'), { status: 400 });
@@ -246,6 +252,7 @@ async function openRouterChat({ model, messages, temperature, maxTokens, title }
     temperature: typeof temperature === 'number' ? Math.min(Math.max(temperature, 0), 1) : 0.3,
     max_tokens: maxTokens || 3500,
   };
+  if (Array.isArray(tools) && tools.length) body.tools = tools;
   if (/r1|reasoner|thinking/i.test(model)) body.reasoning = { effort: 'medium' };
   const r = await fetchUpstream('https://openrouter.ai/api/v1/chat/completions', {
     method: 'POST',
@@ -263,7 +270,15 @@ async function openRouterChat({ model, messages, temperature, maxTokens, title }
     e.status = r.status;
     throw e;
   }
-  const reply = (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) || '';
+  const msg = data.choices && data.choices[0] && data.choices[0].message;
+  if (raw) {
+    return {
+      content: String((msg && msg.content) || ''),
+      tool_calls: Array.isArray(msg && msg.tool_calls) ? msg.tool_calls : [],
+      finish_reason: (data.choices && data.choices[0] && data.choices[0].finish_reason) || '',
+    };
+  }
+  const reply = (msg && msg.content) || '';
   if (!reply) throw Object.assign(new Error('empty_upstream_reply'), { status: 502 });
   return String(reply);
 }
@@ -1358,7 +1373,8 @@ app.post(['/api/google/disconnect', '/google/disconnect'], async (req, res) => {
 });
 
 // Helper agent : access_token frais depuis le refresh_token du coffre (usage interne).
-async function getGoogleAccessToken(integration) {
+// force=true : ignore le cache et force le refresh (après un 401 Google).
+async function getGoogleAccessToken(integration, force) {
   if (!GOOGLE_OAUTH_SCOPES[integration]) throw Object.assign(new Error('integration inconnue'), { status: 400 });
   const ref = googleConnRef(ADMIN_UID, integration);
   let doc = null;
@@ -1371,7 +1387,7 @@ async function getGoogleAccessToken(integration) {
   if (!doc || !doc.refresh_token) {
     throw Object.assign(new Error('backend_not_configured: compte Google non connecté pour ' + integration), { status: 503 });
   }
-  if (doc.access_token && Number(doc.expiry_date) > Date.now() + 60000) {
+  if (!force && doc.access_token && Number(doc.expiry_date) > Date.now() + 60000) {
     return String(doc.access_token);
   }
   const oauth2 = googleOAuthClient();
@@ -1486,6 +1502,413 @@ function injectImagesIntoMessages(messages, resolved) {
   return copy;
 }
 
+// ============ TOOL REGISTRY CENTRAL (registre d'outils partagé) ============
+// Pattern standard multi-agents : les agents ne "possèdent" PAS les outils, ils
+// demandent au registre. Le registre vérifie le manifest de l'agent, récupère
+// le token OAuth depuis le coffre Firestore (refresh auto, rejeu 401) et exécute.
+// MÊMES outils pour TOUS les agents, sans duplication de code.
+// Couverture : Google Sheets, Google Docs, Google Drive, Base de connaissances.
+// (Les MCP métier Compta/Legal/RECO restent sur /api/mcp/call : autre auth.)
+async function withGoogleAuth(integration, fn) {
+  const { google } = require('googleapis');
+  const mk = async (force) => {
+    const token = await getGoogleAccessToken(integration, force);
+    const oauth2 = new google.auth.OAuth2();
+    oauth2.setCredentials({ access_token: token });
+    return { google, auth: oauth2 };
+  };
+  try {
+    return await fn(await mk(false));
+  } catch (e) {
+    const code = Number((e && (e.code || e.status)) || (e && e.response && e.response.status) || 0);
+    const msg = String((e && e.message) || '');
+    if (code === 401 || /invalid_grant/i.test(msg)) {
+      // Refresh forcé + UN seul rejeu (§4 : rafraîchissement automatique).
+      try {
+        return await fn(await mk(true));
+      } catch (e2) {
+        throw Object.assign(new Error('google_auth_echec: compte Google à reconnecter (Connexions).'), { status: 502 });
+      }
+    }
+    if (code === 404) throw Object.assign(new Error('google_introuvable: ' + msg.slice(0, 200)), { status: 404 });
+    if (code === 403) throw Object.assign(new Error('google_interdit (droits insuffisants): ' + msg.slice(0, 200)), { status: 502 });
+    throw Object.assign(new Error(`google_api_${code || 'erreur'}: ` + msg.slice(0, 200)), { status: 502 });
+  }
+}
+
+// Résout un spreadsheetId depuis un ID direct ou un NOM (via Drive).
+// Cache mémoire 5 min (nom -> id). Lève 400/404 explicites.
+const sheetIdCache = new Map();
+async function resolveSpreadsheetId({ spreadsheetId, spreadsheetName, integration }) {
+  const id = str(spreadsheetId, 120).trim();
+  if (/^[A-Za-z0-9-_]{10,}$/.test(id)) return id;
+  const name = str(spreadsheetName, 120).trim();
+  if (!name) throw Object.assign(new Error('spreadsheetId ou spreadsheetName requis'), { status: 400 });
+  const key = `${integration}|${name.toLowerCase()}`;
+  const cached = sheetIdCache.get(key);
+  if (cached && Date.now() - cached.at < 5 * 60 * 1000) return cached.id;
+  const found = await withGoogleAuth(integration, async ({ google, auth }) => {
+    const drive = google.drive({ version: 'v3', auth });
+    const q = `name = '${name.replace(/'/g, "\\'")}' and mimeType = 'application/vnd.google-apps.spreadsheet' and trashed = false`;
+    const r = await drive.files.list({ q, pageSize: 5, fields: 'files(id,name,modifiedTime)', orderBy: 'modifiedTime desc' });
+    const files = (r && r.data && r.data.files) || [];
+    if (!files.length) throw Object.assign(new Error(`classeur introuvable : « ${name} »`), { status: 404 });
+    return files[0].id;
+  });
+  sheetIdCache.set(key, { id: found, at: Date.now() });
+  if (sheetIdCache.size > 200) sheetIdCache.delete(sheetIdCache.keys().next().value);
+  return found;
+}
+
+// Intégration Drive : drive.file est consenti dans les deux docs Sheets et Docs.
+// On préfère le doc Sheets, repli sur Docs.
+async function driveIntegration() {
+  for (const id of ['google-sheets', 'google-docs']) {
+    try {
+      const ref = googleConnRef(ADMIN_UID, id);
+      let doc = null;
+      if (ref) {
+        const snap = await ref.get().catch(() => null);
+        if (snap && snap.exists) doc = snap.data();
+      } else if (memoryStore.google_oauth) {
+        doc = memoryStore.google_oauth[id] || null;
+      }
+      if (doc && doc.refresh_token) return id;
+    } catch {}
+  }
+  throw Object.assign(new Error('backend_not_configured: compte Google non connecté (Drive)'), { status: 503 });
+}
+
+const TOOL_REGISTRY = {
+  'knowledge.search': {
+    connector: 'Base de connaissances',
+    kind: 'read',
+    description: 'Recherche dans la base de connaissances interne (documents indexés : SYSCOHADA, fiscalité, procédures). À appeler dès qu’une question peut avoir sa réponse dans la documentation.',
+    parameters: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'Question ou mots-clés (3 caractères min).' },
+        topK: { type: 'integer', description: 'Nombre de passages (1 à 5, défaut 2).' },
+      },
+      required: ['query'],
+    },
+    handler: async (args) => {
+      const out = await ragSearchCore(str((args || {}).query, 2000), parseInt(String((args || {}).topK || '2'), 10) || 2);
+      return { mode: out.mode, results: out.results };
+    },
+  },
+  'sheets.read_range': {
+    connector: 'Google Sheets',
+    kind: 'read',
+    description: 'Lit une plage de cellules d’un classeur (ex : "Journal!A1:I50"). Identifie le classeur par ID ou par NOM.',
+    parameters: {
+      type: 'object',
+      properties: {
+        spreadsheetId: { type: 'string', description: 'ID du classeur (optionnel si spreadsheetName).' },
+        spreadsheetName: { type: 'string', description: 'Nom exact du classeur (optionnel si spreadsheetId).' },
+        range: { type: 'string', description: 'Plage A1, ex "Feuille1!A1:C20" (défaut A1:Z200).' },
+      },
+    },
+    handler: async (args) => {
+      const integration = 'google-sheets';
+      const id = await resolveSpreadsheetId({ spreadsheetId: args.spreadsheetId, spreadsheetName: args.spreadsheetName, integration });
+      const range = str(args.range, 120).trim() || 'A1:Z200';
+      const out = await withGoogleAuth(integration, async ({ google, auth }) => {
+        const sheets = google.sheets({ version: 'v4', auth });
+        const r = await sheets.spreadsheets.values.get({ spreadsheetId: id, range });
+        return { range: (r.data && r.data.range) || range, values: (r.data && r.data.values) || [] };
+      });
+      return { spreadsheetId: id, range: out.range, rowCount: out.values.length, values: out.values.slice(0, 200) };
+    },
+  },
+  'sheets.append_rows': {
+    connector: 'Google Sheets',
+    kind: 'write',
+    description: 'AJOUTE des lignes à la fin d’une plage (jamais d’écrasement) : écritures comptables, journaux, suivis. Chaque ligne = tableau de cellules.',
+    parameters: {
+      type: 'object',
+      properties: {
+        spreadsheetId: { type: 'string', description: 'ID du classeur (optionnel si spreadsheetName).' },
+        spreadsheetName: { type: 'string', description: 'Nom exact du classeur (optionnel si spreadsheetId).' },
+        range: { type: 'string', description: 'Plage cible, ex "Journal!A:I" (défaut "A:I").' },
+        values: { type: 'array', description: 'Lignes à ajouter : tableau de tableaux de cellules (max 200 lignes).', items: { type: 'array', items: { type: 'string' } } },
+      },
+      required: ['values'],
+    },
+    handler: async (args) => {
+      const integration = 'google-sheets';
+      const values = (Array.isArray(args.values) ? args.values : []).slice(0, 200)
+        .map((r) => (Array.isArray(r) ? r.slice(0, 50).map((c) => String(c == null ? '' : c).slice(0, 500)) : []))
+        .filter((r) => r.length);
+      if (!values.length) throw Object.assign(new Error('values[][] requis (lignes non vides)'), { status: 400 });
+      const id = await resolveSpreadsheetId({ spreadsheetId: args.spreadsheetId, spreadsheetName: args.spreadsheetName, integration });
+      const range = str(args.range, 120).trim() || 'A:I';
+      const out = await withGoogleAuth(integration, async ({ google, auth }) => {
+        const sheets = google.sheets({ version: 'v4', auth });
+        const r = await sheets.spreadsheets.values.append({
+          spreadsheetId: id, range, valueInputOption: 'USER_ENTERED', requestBody: { values },
+        });
+        const u = (r.data && r.data.updates) || {};
+        return { updatedRange: u.updatedRange || '', updatedRows: u.updatedRows || 0, updatedCells: u.updatedCells || 0 };
+      });
+      return { spreadsheetId: id, ...out };
+    },
+  },
+  'sheets.create_spreadsheet': {
+    connector: 'Google Sheets',
+    kind: 'write',
+    description: 'Crée un nouveau classeur avec un titre et des onglets optionnels. Retourne l’ID et l’URL.',
+    parameters: {
+      type: 'object',
+      properties: {
+        title: { type: 'string', description: 'Titre du classeur.' },
+        sheets: { type: 'array', description: 'Noms des onglets à créer.', items: { type: 'string' } },
+      },
+      required: ['title'],
+    },
+    handler: async (args) => {
+      const integration = 'google-sheets';
+      const title = str(args.title, 120).trim();
+      if (!title) throw Object.assign(new Error('title requis'), { status: 400 });
+      const tabs = (Array.isArray(args.sheets) ? args.sheets : []).slice(0, 20)
+        .map((s) => String(s).slice(0, 60).trim()).filter(Boolean);
+      const out = await withGoogleAuth(integration, async ({ google, auth }) => {
+        const sheets = google.sheets({ version: 'v4', auth });
+        const r = await sheets.spreadsheets.create({
+          requestBody: { properties: { title }, sheets: tabs.map((t) => ({ properties: { title: t } })) },
+        });
+        return { id: r.data.spreadsheetId, url: r.data.spreadsheetUrl, title: (r.data.properties && r.data.properties.title) || title };
+      });
+      return out;
+    },
+  },
+  'docs.create_document': {
+    connector: 'Google Docs',
+    kind: 'write',
+    description: 'Crée un document Google Docs vide avec un titre. Retourne l’ID et l’URL.',
+    parameters: {
+      type: 'object',
+      properties: {
+        title: { type: 'string', description: 'Titre du document.' },
+      },
+      required: ['title'],
+    },
+    handler: async (args) => {
+      const integration = 'google-docs';
+      const title = str(args.title, 120).trim();
+      if (!title) throw Object.assign(new Error('title requis'), { status: 400 });
+      const out = await withGoogleAuth(integration, async ({ google, auth }) => {
+        const docs = google.docs({ version: 'v1', auth });
+        const r = await docs.documents.create({ requestBody: { title } });
+        return { id: r.data.documentId, title: r.data.title || title };
+      });
+      return out;
+    },
+  },
+  'docs.append_text': {
+    connector: 'Google Docs',
+    kind: 'write',
+    description: 'Ajoute du texte à la fin d’un document Google Docs existant.',
+    parameters: {
+      type: 'object',
+      properties: {
+        documentId: { type: 'string', description: 'ID du document.' },
+        text: { type: 'string', description: 'Texte à ajouter (max 20000 car.).' },
+      },
+      required: ['documentId', 'text'],
+    },
+    handler: async (args) => {
+      const integration = 'google-docs';
+      const documentId = str(args.documentId, 120).trim();
+      const text = String(args.text || '');
+      if (!documentId) throw Object.assign(new Error('documentId requis'), { status: 400 });
+      if (!text.trim()) throw Object.assign(new Error('text requis (non vide)'), { status: 400 });
+      await withGoogleAuth(integration, async ({ google, auth }) => {
+        const docs = google.docs({ version: 'v1', auth });
+        await docs.documents.batchUpdate({
+          documentId,
+          requestBody: { requests: [{ insertText: { location: { index: 1 }, text: text.slice(0, 20000) } }] },
+        });
+      });
+      return { documentId, appendedChars: Math.min(text.length, 20000) };
+    },
+  },
+  'drive.list_files': {
+    connector: 'Google Drive',
+    kind: 'read',
+    description: 'Liste les fichiers du Drive (nom, type, date). Accepte une requête de recherche Drive ou liste les récents par défaut.',
+    parameters: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'Requête Drive (ex : "name contains \'journal\'"). Vide = fichiers récents.' },
+        pageSize: { type: 'integer', description: 'Nombre de fichiers (1 à 50, défaut 20).' },
+      },
+    },
+    handler: async (args) => {
+      const integration = await driveIntegration();
+      const pageSize = Math.min(Math.max(parseInt(String((args || {}).pageSize || '20'), 10) || 20, 1), 50);
+      const q = str((args || {}).query, 500).trim();
+      const out = await withGoogleAuth(integration, async ({ google, auth }) => {
+        const drive = google.drive({ version: 'v3', auth });
+        const params = { pageSize, fields: 'files(id,name,mimeType,modifiedTime,size)', orderBy: 'modifiedTime desc' };
+        if (q) params.q = q;
+        const r = await drive.files.list(params);
+        return ((r.data && r.data.files) || []).map((f) => ({
+          id: f.id, name: f.name, mimeType: f.mimeType, modifiedTime: f.modifiedTime, size: f.size || null,
+        }));
+      });
+      return { files: out };
+    },
+  },
+};
+
+// Manifests de permissions par agent : chaque agent ne voit et n'exécute
+// QUE ses outils. Agent inconnu -> manifest restreint par défaut.
+const AGENT_TOOL_MANIFESTS = {
+  'agent-router': ['knowledge.search', 'sheets.read_range', 'drive.list_files'],
+  'agent-1': ['knowledge.search', 'sheets.read_range', 'sheets.append_rows', 'sheets.create_spreadsheet', 'drive.list_files'],
+  'agent-2': ['knowledge.search', 'sheets.read_range', 'drive.list_files'],
+  'agent-3': ['knowledge.search', 'docs.create_document', 'docs.append_text', 'drive.list_files', 'sheets.read_range'],
+};
+const DEFAULT_AGENT_TOOLS = ['knowledge.search'];
+
+function resolveAgentTools(agentId) {
+  const names = AGENT_TOOL_MANIFESTS[String(agentId)] || DEFAULT_AGENT_TOOLS;
+  return openAiToolsFor(names);
+}
+
+function openAiToolsFor(names) {
+  return (Array.isArray(names) ? names : [])
+    .map((n) => (TOOL_REGISTRY[n] ? { key: n, def: TOOL_REGISTRY[n] } : null))
+    .filter(Boolean)
+    .map(({ key, def }) => ({
+      type: 'function',
+      function: { name: key, description: def.description, parameters: def.parameters },
+    }));
+}
+
+async function connectorStatuses() {
+  // Best-effort : présence d'un refresh_token par intégration (jamais de secret).
+  const out = { 'google-sheets': 'inconnu', 'google-docs': 'inconnu' };
+  try {
+    for (const id of ['google-sheets', 'google-docs']) {
+      const ref = googleConnRef(ADMIN_UID, id);
+      let doc = null;
+      if (ref) {
+        const snap = await ref.get().catch(() => null);
+        if (snap && snap.exists) doc = snap.data();
+      } else if (memoryStore.google_oauth) {
+        doc = memoryStore.google_oauth[id] || null;
+      }
+      out[id] = doc && doc.refresh_token ? 'connecté' : 'non connecté';
+    }
+  } catch {}
+  return out;
+}
+
+// Injection dynamique (§3) : la section d'outils ajoutée au system prompt à
+// CHAQUE requête, avec le statut réel des connecteurs. namesOverride permet
+// d'annoncer exactement ce que le LLM pourra appeler (tableau explicite).
+async function buildToolsPromptSection(agentId, namesOverride) {
+  const names = Array.isArray(namesOverride) && namesOverride.length
+    ? namesOverride.filter((n) => TOOL_REGISTRY[n])
+    : AGENT_TOOL_MANIFESTS[String(agentId)] || DEFAULT_AGENT_TOOLS;
+  const status = await connectorStatuses().catch(() => ({}));
+  const toolFor = (n) => {
+    if (n === 'knowledge.search') return 'base de connaissances (toujours disponible)';
+    if (n.startsWith('sheets.')) return `Google Sheets (${status['google-sheets'] || 'inconnu'})`;
+    if (n.startsWith('docs.')) return `Google Docs (${status['google-docs'] || 'inconnu'})`;
+    if (n.startsWith('drive.')) return `Google Drive (${status['google-sheets'] || 'inconnu'})`;
+    return 'connecteur inconnu';
+  };
+  const lines = names
+    .map((n) => {
+      const t = TOOL_REGISTRY[n];
+      if (!t) return null;
+      return `- ${n} : ${t.description} [${toolFor(n)}]`;
+    })
+    .filter(Boolean);
+  if (!lines.length) return '';
+  return `[Outils natifs disponibles — utilise-les au lieu de prétendre agir.\n${lines.join('\n')}\nRÈGLE : n'appelle un outil QUE si la demande l'exige vraiment. Les résultats d'outils te seront renvoyés : exploite-les dans ta réponse finale au lieu de les ignorer.]`;
+}
+
+// Exécution : vérifie le manifest, exécute avec timeout 25 s, audite.
+// Ne lève JAMAIS pour une erreur d'outil (retourne {ok:false}) : le LLM voit
+// l'échec et l'explique au lieu de planter la boucle.
+async function executeRegistryTool(name, args, agentId, meta, allowedOverride) {
+  const t0 = Date.now();
+  const tool = TOOL_REGISTRY[String(name)];
+  const finish = (status, payload) => {
+    logToolCall({
+      tool: String(name), software: tool ? tool.connector : 'registry',
+      args: args || {}, status, latencyMs: Date.now() - t0,
+      wamid: meta && meta.wamid, phone: meta && meta.phone,
+    });
+    return payload;
+  };
+  if (!tool) return finish('error', { ok: false, error: `outil inconnu : ${String(name).slice(0, 80)}` });
+  const allowed = Array.isArray(allowedOverride) && allowedOverride.length
+    ? allowedOverride.filter((n) => TOOL_REGISTRY[n])
+    : AGENT_TOOL_MANIFESTS[String(agentId)] || DEFAULT_AGENT_TOOLS;
+  if (!allowed.includes(String(name))) {
+    return finish('error', { ok: false, error: `permission refusée : l'agent ${String(agentId).slice(0, 40)} n'a pas accès à ${String(name).slice(0, 80)}` });
+  }
+  try {
+    const out = await withTimeout(Promise.resolve().then(() => tool.handler(args || {}, { agentId })), 25000, 'tool_timeout');
+    return finish('ok', { ok: true, result: out });
+  } catch (e) {
+    return finish('error', { ok: false, error: String((e && e.message) || 'tool_failed').slice(0, 500) });
+  }
+}
+
+// Boucle agentique : le LLM décide (tool_calls), le backend exécute, le LLM
+// finalise. 4 rounds max, 4 appels/round max. Sans outils (agent inconnu ou
+// manifest vide) : appel direct legacy, comportement inchangé.
+const AGENTIC_MAX_ROUNDS = 4;
+const AGENTIC_MAX_CALLS_PER_ROUND = 4;
+async function runAgenticLoop({ model, messages, agentId, temperature, maxTokens, allowedTools }) {
+  const names = Array.isArray(allowedTools) && allowedTools.length
+    ? allowedTools.filter((n) => TOOL_REGISTRY[n])
+    : AGENT_TOOL_MANIFESTS[String(agentId)] || DEFAULT_AGENT_TOOLS;
+  const tools = openAiToolsFor(names);
+  if (!tools.length) {
+    const reply = await openRouterChat({ model, messages, temperature, maxTokens });
+    return { reply, trace: [], toolsUsed: false };
+  }
+  const section = await buildToolsPromptSection(agentId, names).catch(() => '');
+  const msgs = (messages || []).map((m) => ({ ...m }));
+  if (msgs.length && msgs[0] && msgs[0].role === 'system' && typeof msgs[0].content === 'string') {
+    msgs[0] = { ...msgs[0], content: `${msgs[0].content}\n\n${section}` };
+  } else if (section) {
+    msgs.unshift({ role: 'system', content: section });
+  }
+  const trace = [];
+  for (let round = 0; round < AGENTIC_MAX_ROUNDS; round++) {
+    const res = await openRouterChat({ model, messages: msgs, temperature, maxTokens, tools, raw: true });
+    const calls = (res.tool_calls || []).slice(0, AGENTIC_MAX_CALLS_PER_ROUND);
+    if (!calls.length) return { reply: res.content || '', trace, toolsUsed: true };
+    msgs.push({
+      role: 'assistant',
+      content: res.content || '',
+      tool_calls: calls.map((c) => ({
+        id: c.id,
+        type: 'function',
+        function: { name: (c.function && c.function.name) || '', arguments: (c.function && c.function.arguments) || '{}' },
+      })),
+    });
+    for (const c of calls) {
+      const tName = (c.function && c.function.name) || '';
+      let tArgs = {};
+      try { tArgs = JSON.parse((c.function && c.function.arguments) || '{}'); } catch { tArgs = {}; }
+      const out = await executeRegistryTool(tName, tArgs, agentId, {}, names);
+      trace.push({ tool: tName, ok: Boolean(out.ok) });
+      msgs.push({ role: 'tool', tool_call_id: c.id || `call-${trace.length}`, content: JSON.stringify(out).slice(0, 4000) });
+    }
+  }
+  const fin = await openRouterChat({ model, messages: msgs, temperature, maxTokens });
+  return { reply: fin, trace, toolsUsed: true };
+}
+
 app.post(['/api/chat', '/chat'], async (req, res) => {
   if (!checkRateLimit(req, res, 30)) return;
   const apiKey = (process.env.OPENROUTER_API_KEY || '').trim();
@@ -1524,8 +1947,64 @@ app.post(['/api/chat', '/chat'], async (req, res) => {
     }
   }
   const finalMessages = injectImagesIntoMessages(messages, resolved);
+  // Boucle agentique (Tool Registry) : `tools: 'auto'` -> manifest de l'agent,
+  // tableau explicite -> intersection avec le registre. Absent -> appel direct.
+  const rawAgentId = typeof (req.body || {}).agentId === 'string' ? String((req.body || {}).agentId).slice(0, 80) : '';
+  const toolsReq = (req.body || {}).tools;
+  let requestedToolNames = null;
+  if (toolsReq === 'auto') {
+    requestedToolNames = (AGENT_TOOL_MANIFESTS[rawAgentId] || DEFAULT_AGENT_TOOLS).slice();
+  } else if (Array.isArray(toolsReq) && toolsReq.length) {
+    requestedToolNames = toolsReq.map(String).slice(0, 10).filter((n) => TOOL_REGISTRY[n]);
+  }
+  const effectiveAgentId = rawAgentId || 'unknown';
+  const writeSseHeaders = () => {
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache, no-transform',
+      Connection: 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    });
+  };
+  const mapLoopError = (e) => {
+    const msg = String((e && e.message) || 'upstream_unreachable');
+    if (/^backend_not_configured/.test(msg)) return { status: 503, body: { error: 'backend_not_configured', detail: 'OPENROUTER_API_KEY manquant côté backend (functions/.env ou env Firebase).' } };
+    if (/^openrouter_429/.test(msg)) {
+      console.warn(`[UPSTREAM] openrouter_429 model=${String(model).slice(0, 80)}`);
+      return { status: 429, body: { error: 'openrouter_429', detail: 'Quota OpenRouter atteint (limite du modèle gratuit). Attendez ~1 minute ou changez de modèle.', retry_after_seconds: 60 } };
+    }
+    if (/^openrouter_/.test(msg)) {
+      const parts = msg.split(':');
+      const st = (e && e.status) || 502;
+      return { status: st, body: { error: parts[0], detail: msg.slice(parts[0].length + 2, parts[0].length + 1002) } };
+    }
+    return { status: (e && e.status) || 502, body: { error: 'upstream_unreachable', detail: msg.slice(0, 300) } };
+  };
   // Streaming SSE token-par-token (§1.3) : le front affiche dès le 1er token.
   if (stream === true) {
+    // Avec outils : boucle d'abord, puis pseudo-stream de la réponse finale
+    // (même format SSE {content} + événement {tool_trace} avant [DONE]).
+    if (requestedToolNames && requestedToolNames.length) {
+      try {
+        const out = await runAgenticLoop({ model, messages: finalMessages, agentId: effectiveAgentId, allowedTools: requestedToolNames, temperature, maxTokens });
+        writeSseHeaders();
+        const text = String(out.reply || '');
+        for (const chunk of text.match(/.{1,150}(\s|$)|[\s\S]+/gs) || []) {
+          try { res.write(`data: ${JSON.stringify({ content: chunk })}\n\n`); } catch {}
+        }
+        if (out.trace && out.trace.length) {
+          try { res.write(`data: ${JSON.stringify({ tool_trace: out.trace })}\n\n`); } catch {}
+        }
+        try { res.write('data: [DONE]\n\n'); } catch {}
+        try { res.end(); } catch {}
+        return;
+      } catch (e) {
+        const mapped = mapLoopError(e);
+        if (!res.headersSent) return res.status(mapped.status).json(mapped.body);
+        try { res.end(); } catch {}
+        return;
+      }
+    }
     try {
       const upstream = await fetch('https://openrouter.ai/api/v1/chat/completions', {
         method: 'POST',
@@ -1597,6 +2076,15 @@ app.post(['/api/chat', '/chat'], async (req, res) => {
       if (!res.headersSent) return res.status(502).json({ error: 'upstream_unreachable', detail: msg.slice(0, 300) });
       try { res.end(); } catch {}
       return;
+    }
+  }
+  if (requestedToolNames && requestedToolNames.length) {
+    try {
+      const out = await runAgenticLoop({ model, messages: finalMessages, agentId: effectiveAgentId, allowedTools: requestedToolNames, temperature, maxTokens });
+      return res.status(200).json({ reply: out.reply, tool_trace: out.trace });
+    } catch (e) {
+      const mapped = mapLoopError(e);
+      return res.status(mapped.status).json(mapped.body);
     }
   }
   try {
@@ -3360,53 +3848,63 @@ app.post(['/api/knowledge/upload', '/knowledge/upload'], async (req, res) => {
 
 // Recherche vectorielle : query -> embedding -> cosinus sur les chunks indexés.
 // Retourne [{docId, title, chunk, score}] triés, score >= 0.3, topK borné.
+// Cœur RAG partagé : route /knowledge/search ET outil knowledge.search du registre.
+// Retourne { mode, results }. Lève des erreurs codées (mappées par l'appelant).
+async function ragSearchCore(query, topK) {
+  const q = str(query, 2000).trim();
+  const k = Math.min(Math.max(parseInt(String(topK || '3'), 10) || 3, 1), 5);
+  if (q.length < 3) throw Object.assign(new Error('query requis (>= 3 car.)'), { status: 400 });
+  let docs = [];
+  if (db) {
+    const snap = await db.collection('knowledge_documents').limit(50).get();
+    docs = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  } else {
+    docs = memoryStore.knowledge.slice(0, 50);
+  }
+  // Voie vectorielle d'abord ; repli LEXICAL automatique si les embeddings
+  // sont indisponibles (402 sans crédits, 429, clé absente...). Même format.
+  let qVec = null;
+  let mode = 'vectoriel';
+  try {
+    const vecs = await embedTexts([q]);
+    qVec = vecs[0];
+  } catch (e) {
+    mode = 'lexical';
+    console.warn('[RAG] embeddings indisponibles, repli lexical', String((e && e.message) || e).slice(0, 120));
+  }
+  const scored = [];
+  for (const d of docs) {
+    if (d.status === 'reference') continue;
+    const chunks = await readDocChunks(d.id, 200).catch(() => []);
+    for (const c of chunks) {
+      const txt = String((c && c.text) || '');
+      if (!txt) continue;
+      if (qVec && Array.isArray(c.embedding)) {
+        const score = cosineSim(qVec, c.embedding);
+        if (score >= RAG_MIN_SCORE) {
+          scored.push({ docId: d.id, title: String(d.title || ''), chunk: txt.slice(0, 800), score: Math.round(score * 1000) / 1000 });
+        }
+      } else if (!qVec) {
+        const score = lexicalScore(q, txt);
+        if (score >= RAG_LEXICAL_MIN_SCORE) {
+          scored.push({ docId: d.id, title: String(d.title || ''), chunk: txt.slice(0, 800), score: Math.round(score * 1000) / 1000, lexical: true });
+        }
+      }
+    }
+    if (scored.length > 500) break;
+  }
+  scored.sort((a, b) => b.score - a.score);
+  return { mode, results: scored.slice(0, k) };
+}
+
 app.post(['/api/knowledge/search', '/knowledge/search'], async (req, res) => {
   if (!checkRateLimit(req, res, 20)) return;
   const query = str((req.body || {}).query, 2000).trim();
   const topK = Math.min(Math.max(parseInt(String((req.body || {}).topK || '3'), 10) || 3, 1), 5);
   if (query.length < 3) return res.status(400).json({ error: 'query requis (>= 3 car.)' });
   try {
-    let docs = [];
-    if (db) {
-      const snap = await db.collection('knowledge_documents').limit(50).get();
-      docs = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-    } else {
-      docs = memoryStore.knowledge.slice(0, 50);
-    }
-    // Voie vectorielle d'abord ; repli LEXICAL automatique si les embeddings
-    // sont indisponibles (402 sans crédits, 429, clé absente...). Même format.
-    let qVec = null;
-    let mode = 'vectoriel';
-    try {
-      const vecs = await embedTexts([query]);
-      qVec = vecs[0];
-    } catch (e) {
-      mode = 'lexical';
-      console.warn('[RAG] embeddings indisponibles, repli lexical', String((e && e.message) || e).slice(0, 120));
-    }
-    const scored = [];
-    for (const d of docs) {
-      if (d.status === 'reference') continue;
-      const chunks = await readDocChunks(d.id, 200).catch(() => []);
-      for (const c of chunks) {
-        const txt = String((c && c.text) || '');
-        if (!txt) continue;
-        if (qVec && Array.isArray(c.embedding)) {
-          const score = cosineSim(qVec, c.embedding);
-          if (score >= RAG_MIN_SCORE) {
-            scored.push({ docId: d.id, title: String(d.title || ''), chunk: txt.slice(0, 800), score: Math.round(score * 1000) / 1000 });
-          }
-        } else if (!qVec) {
-          const score = lexicalScore(query, txt);
-          if (score >= RAG_LEXICAL_MIN_SCORE) {
-            scored.push({ docId: d.id, title: String(d.title || ''), chunk: txt.slice(0, 800), score: Math.round(score * 1000) / 1000, lexical: true });
-          }
-        }
-      }
-      if (scored.length > 500) break;
-    }
-    scored.sort((a, b) => b.score - a.score);
-    return res.status(200).json({ ok: true, mode, results: scored.slice(0, topK) });
+    const out = await ragSearchCore(query, topK);
+    return res.status(200).json({ ok: true, mode: out.mode, results: out.results });
   } catch (e) {
     const msg = String((e && e.message) || 'search_unreachable');
     if (/^backend_not_configured/.test(msg)) {
@@ -3908,4 +4406,4 @@ exports.whatsappWebhook = functions.https.onRequest(
 );
 
 // Exportés pour tests locaux uniquement (aucun effet en prod).
-exports.__testUtils = { withTimeout, withDb, fetchUpstream, encodeOAuthState, decodeOAuthState, buildGoogleAuthUrl, GOOGLE_OAUTH_SCOPES, paramsHash, shouldEscalateClarification, computeHallucinations, chunkText, cosineSim, parseLfAsk, classifyIntentBackend, validateComptaProposalBackend, extractIndexableText, mcpDispatch, MCP_SERVER_TOOLS, buildWhatsAppArchiveMeta };
+exports.__testUtils = { withTimeout, withDb, fetchUpstream, encodeOAuthState, decodeOAuthState, buildGoogleAuthUrl, GOOGLE_OAUTH_SCOPES, paramsHash, shouldEscalateClarification, computeHallucinations, chunkText, cosineSim, parseLfAsk, classifyIntentBackend, validateComptaProposalBackend, extractIndexableText, mcpDispatch, MCP_SERVER_TOOLS, buildWhatsAppArchiveMeta, TOOL_REGISTRY, AGENT_TOOL_MANIFESTS, resolveAgentTools, buildToolsPromptSection, executeRegistryTool, runAgenticLoop };
