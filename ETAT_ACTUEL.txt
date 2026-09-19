@@ -695,15 +695,28 @@ H. Vues secondaires : ConversationList (slide-over 380 px "Echanges clients",
   "Deposez vos fichiers", accept image/*,pdf,txt,csv,doc,docx,xls,xlsx.
 - Classification : le File d'origine est passe au classifieur (vision VLM
   backend pour images <= 10 Mo, POST /classify-vision).
-- TRANSMISSION VISION AU LLM (§4) : upload attendu (borne 15 s) -> imagePaths
-  (storagePath) passes a generateChatResponse -> POST /api/chat les resolve
-  cote serveur (bucket ou repli memoire, max 2, 8 Mo) et les injecte en
-  image_url data-URL dans le DERNIER message user, UNIQUEMENT si le modele est
-  vision-capable (regex vl|vision|gpt-4o|claude|gemini|sonnet|opus..., sinon
-  ignore + warn). Logs : nombre + octets, jamais le base64. Ligne systeme
-  hasImages ajoutee ("analyse son contenu visuel en priorite"). Voies
-  directes (sans backend) : images ignorees. Confiance < 60 % sans vision ->
-  consigne de demander un renvoi ou une saisie manuelle, sans bloquer.
+- TRANSMISSION VISION AU LLM (§4, PROUVE E2E prod le 19/09 : pixel rouge ->
+  "Rouge", PDF dummy.pdf cite et resume par le LLM) : upload attendu (borne
+  15 s) -> attachmentPaths (= imagePaths legacy, storagePaths) passes a
+  generateChatResponse -> POST /api/chat : sniffMime par magic bytes (MIME
+  declare non fiable), images (x3 max, 8 Mo) injectees en image_url data-URL
+  dans le DERNIER message user UNIQUEMENT si modele vision-capable, PDF
+  EXTRAITS en texte (pdf-parse) et ajoutes au message (les modeles vision ne
+  lisent pas le binaire PDF). Bucket partage + repli memoire (dev).
+  Logs : nombre + octets, jamais le base64. Ligne systeme hasImages (images
+  uniquement). Voies directes : images ignorees. Confiance < 60 % sans
+  vision -> consigne de demander un renvoi ou une saisie manuelle.
+- GARDE ANTI-AVEUGLE (web) : isVisionModel() (miroir regex backend) ; si image
+  jointe + modele actif NON vision, l'appel detaille BASCULE sur Ling 3.0
+  vision + toast explicite (fini le skip silencieux qui faisait dire a l'IA
+  qu'elle ne recevait rien). Brief/RAG/classification gardent le modele
+  choisi ; audit = modele reellement utilise. PDF : pas de switch (texte
+  extrait, modele-agnostique).
+- WHATSAPP (§4) : binaire media CONSERVE (waMediaBuf, ≤ 6 Mo) et inline en
+  vision dans la composition (modele principal vision ; repli texte seul sur
+  le secondaire) ; PDF extraits via extractIndexableText + typage par
+  mots-cles (0.75) ; MIME sniffe (fini image/jpeg force) ; note de renvoi si
+  piece illisible (§4.3). Provenance : downloadMedia Meta (10 Mo max).
 
 --------------------------------------------------------------------------------
 18. VOIX + SIGNAUX FRUSTRATION
