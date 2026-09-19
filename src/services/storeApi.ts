@@ -62,6 +62,8 @@ function mapKnowledgeDoc(d: any): KnowledgeDocument {
     status: typeof d.status === 'string' ? d.status : undefined,
     chunkCount: Number.isFinite(Number(d.chunkCount)) ? Number(d.chunkCount) : undefined,
     indexReason: typeof d.indexReason === 'string' && d.indexReason ? d.indexReason : undefined,
+    mimeType: typeof d.mimeType === 'string' && d.mimeType ? d.mimeType : undefined,
+    textPreview: typeof d.textPreview === 'string' && d.textPreview ? d.textPreview : undefined,
   };
 }
 

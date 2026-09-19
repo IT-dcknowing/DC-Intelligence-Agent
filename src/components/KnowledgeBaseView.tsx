@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   BookOpen,
   Scale,
@@ -13,8 +13,11 @@ import {
   CheckCircle2,
   Trash2,
   X,
+  Eye,
+  Loader2,
 } from 'lucide-react';
 import { KnowledgeDocument } from '../types';
+import { downloadKnowledge, base64ToBlob } from '../services/storeApi';
 
 interface KnowledgeBaseViewProps {
   documents: KnowledgeDocument[];
@@ -49,6 +52,87 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
   const [isReindexing, setIsReindexing] = useState(false);
   const [reindexSuccess, setReindexSuccess] = useState(false);
   const [isDragOver, setIsDragOver] = useState(false);
+  // Aperçu du contenu (revoir le document en session ultérieure, sans retélécharger
+  // à chaque fois : l'URL blob est révoquée au changement de document).
+  type PreviewState =
+    | { kind: 'image'; url: string }
+    | { kind: 'text'; text: string }
+    | { kind: 'pdf-text'; text: string };
+  const [preview, setPreview] = useState<PreviewState | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const previewUrlRef = useRef<string | null>(null);
+
+  const clearPreview = () => {
+    if (previewUrlRef.current) {
+      URL.revokeObjectURL(previewUrlRef.current);
+      previewUrlRef.current = null;
+    }
+    setPreview(null);
+    setPreviewError(null);
+    setPreviewLoading(false);
+  };
+
+  // Changement de document => aperçu précédent invalide.
+  useEffect(() => {
+    clearPreview();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedDocId]);
+
+  useEffect(() => {
+    return () => {
+      if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
+    };
+  }, []);
+
+  const handlePreview = async () => {
+    if (!selectedDoc || previewLoading) return;
+    clearPreview();
+    const mime = (selectedDoc.mimeType || '').toLowerCase();
+    const name = (selectedDoc.title || '').toLowerCase();
+    const isImage = mime.startsWith('image/');
+    const isTextLike =
+      mime.startsWith('text/') ||
+      mime.includes('json') ||
+      mime.includes('csv') ||
+      /\.(txt|md|csv|json)$/i.test(name);
+    const isPdf = mime === 'application/pdf' || /\.pdf$/i.test(name);
+    // PDF : l'extrait indexé stocké suffit (pas de lecteur PDF embarqué).
+    if (isPdf && !isImage && !isTextLike) {
+      if (selectedDoc.textPreview && selectedDoc.textPreview.trim()) {
+        setPreview({ kind: 'pdf-text', text: selectedDoc.textPreview });
+      } else {
+        setPreviewError('Aucun extrait de texte pour ce PDF — utilisez Télécharger pour voir l’original.');
+      }
+      return;
+    }
+    if (!isImage && !isTextLike) {
+      setPreviewError('Aperçu non disponible pour ce type de fichier — utilisez Télécharger.');
+      return;
+    }
+    setPreviewLoading(true);
+    try {
+      const dl = await downloadKnowledge(selectedDoc.id);
+      if (!dl || !dl.base64) throw new Error('vide');
+      if (isImage) {
+        const blob = base64ToBlob(dl.base64, dl.mimeType);
+        const url = URL.createObjectURL(blob);
+        previewUrlRef.current = url;
+        setPreview({ kind: 'image', url });
+      } else {
+        const bin = atob(dl.base64);
+        const bytes = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        const text = new TextDecoder('utf-8').decode(bytes);
+        setPreview({ kind: 'text', text });
+      }
+    } catch {
+      setPreviewError('Impossible de charger l’aperçu (serveur injoignable ou fichier absent).');
+    } finally {
+      setPreviewLoading(false);
+    }
+  };
+
   // Modale "Ajouter un texte" (2e option d'alimentation avec l'import fichier).
   const [showTextModal, setShowTextModal] = useState(false);
   const [textTitle, setTextTitle] = useState('');
@@ -375,6 +459,68 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
               <p className="text-[14px] text-[#475569] leading-relaxed whitespace-pre-line">
                 {selectedDoc.summary}
               </p>
+            </div>
+
+            {/* Section Contenu : revoir le document en session ultérieure.
+                Images/textes via le fichier stocké, PDF via l'extrait indexé. */}
+            <div className="p-5 rounded-2xl bg-white border border-[#E2E8F0] space-y-3">
+              <div className="flex items-center justify-between gap-3">
+                <h3 className="text-[14px] font-bold text-[#1E293B] uppercase tracking-wide">
+                  Contenu du document
+                </h3>
+                {!preview && !previewLoading && (
+                  <button
+                    type="button"
+                    onClick={handlePreview}
+                    className="px-3.5 py-1.5 rounded-xl text-[12px] font-semibold bg-white border border-[#E2E8F0] text-[#1E293B] hover:border-black flex items-center gap-1.5 transition-colors cursor-pointer"
+                  >
+                    <Eye className="w-3.5 h-3.5" />
+                    <span>Afficher l’aperçu</span>
+                  </button>
+                )}
+              </div>
+
+              {previewLoading && (
+                <div className="flex items-center gap-2 text-[13px] text-[#64748B] py-4 justify-center">
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <span>Chargement de l’aperçu depuis Firebase…</span>
+                </div>
+              )}
+
+              {previewError && (
+                <div className="px-3 py-2.5 rounded-xl bg-[#F9FAFB] border border-[#E5E7EB] text-[12px] text-[#1F2937]">
+                  {previewError}
+                </div>
+              )}
+
+              {preview?.kind === 'image' && (
+                <div className="rounded-xl overflow-hidden border border-[#E5E7EB] bg-[#F8FAFC] flex justify-center">
+                  <img
+                    src={preview.url}
+                    alt={selectedDoc.title}
+                    className="max-h-[480px] w-auto object-contain"
+                  />
+                </div>
+              )}
+
+              {(preview?.kind === 'text' || preview?.kind === 'pdf-text') && (
+                <div>
+                  {preview.kind === 'pdf-text' && (
+                    <p className="text-[11px] text-[#94A3B8] mb-1.5">
+                      Extrait indexé (mise en page d’origine dans le PDF téléchargé).
+                    </p>
+                  )}
+                  <pre className="p-4 rounded-xl bg-[#F8FAFC] border border-[#E5E7EB] text-[12.5px] text-[#1E293B] leading-relaxed whitespace-pre-wrap break-words max-h-[480px] overflow-y-auto font-sans">
+                    {preview.text}
+                  </pre>
+                </div>
+              )}
+
+              {!preview && !previewLoading && !previewError && (
+                <p className="text-[12px] text-[#94A3B8]">
+                  L’aperçu charge le fichier stocké sur Firebase (image, texte) ou l’extrait indexé (PDF).
+                </p>
+              )}
             </div>
 
             {/* Section Indexation pour les agents IA — état RÉEL du serveur */}

@@ -181,6 +181,10 @@ export interface KnowledgeDocument {
   status?: string;
   chunkCount?: number;
   indexReason?: string;
+  // Révision du contenu en session ultérieure (visionneuse) : type MIME réel +
+  // extrait indexé (4000 car.). Le contenu COMPLET passe par /download.
+  mimeType?: string;
+  textPreview?: string;
 }
 
 export type LLMProvider = 'openrouter' | 'anthropic' | 'deepseek' | 'groq';
