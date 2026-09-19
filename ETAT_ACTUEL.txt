@@ -848,7 +848,10 @@ ROUTES (methode, path, role, rate-limit/min) :
 . GET /agents : liste. [60] / PUT /agents/:id : upsert sanitise. [20] /
   DELETE /agents/:id : suppression. [10]
 . GET /knowledge : liste (100). [60] / POST /knowledge/seed : seed
-  metadonnees seules (20 max, status reference). [10] /
+  metadonnees seules (20 max, status reference, PLUS APPELE nulle part). [10] /
+  POST /knowledge/text : SAISIE MANUELLE {title 1..120, text 20..200000 car.,
+  category?} -> stocke en .txt Storage + meme indexation (chunks toujours,
+  vecteurs best-effort) + meme format reponse. [10] /
   POST /knowledge/upload : base64<=11M (fichier <=8M) -> Storage
   knowledge/<id>/<nom> (+repli memoire), extractIndexableText (texte / PDF
   pdf-parse / image VLM) -> indexed/partial/pending + motif. [10] /
