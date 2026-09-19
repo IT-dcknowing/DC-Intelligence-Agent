@@ -75,6 +75,7 @@ import {
   persistAgent,
   fetchKnowledge,
   uploadKnowledge,
+  addKnowledgeText,
   deleteKnowledgeDoc,
   downloadKnowledge,
   reindexKnowledge,
@@ -1486,6 +1487,32 @@ export default function App() {
     }
   };
 
+  // Saisie manuelle : titre + texte -> Firestore/Storage via /knowledge/text,
+  // mêmes statuts/toasts que l'import fichier (utilisable par les agents).
+  const handleAddTextDocument = async (title: string, text: string, category: string) => {
+    setIsUploadingDoc(true);
+    try {
+      const doc = await addKnowledgeText(title, text, category || 'PROCÉDURES SYSCOHADA');
+      setKnowledgeDocs((prev) => [doc, ...prev.filter((d) => d.id !== doc.id)]);
+      const searchablePending = doc.status === 'pending' && (doc.chunkCount || 0) > 0;
+      if (doc.status === 'indexed' || doc.status === 'partial' || searchablePending) {
+        addToast(
+          'success',
+          'Texte utilisable par les agents',
+          searchablePending
+            ? `"${doc.title}" : ${doc.chunkCount} chunks en recherche par mots-clés.`
+            : `"${doc.title}" : ${doc.chunkCount || 0} chunks indexés.`
+        );
+      } else {
+        addToast('success', 'Texte enregistré', `"${doc.title}" stocké. ${doc.indexReason || 'Indexation à venir.'}`);
+      }
+    } catch (err: any) {
+      addToast('error', 'Échec de l’enregistrement', err?.message || 'Serveur injoignable.');
+    } finally {
+      setIsUploadingDoc(false);
+    }
+  };
+
   const handleDeleteDocument = async (docId: string) => {
     const ok = await deleteKnowledgeDoc(docId).catch(() => false);
     if (!ok) {
@@ -1669,6 +1696,7 @@ export default function App() {
           <KnowledgeBaseView
             documents={knowledgeDocs}
             onUploadDocument={handleUploadDocument}
+            onAddTextDocument={handleAddTextDocument}
             onDeleteDocument={handleDeleteDocument}
             onDownloadDocument={handleDownloadDocument}
             onReindexDocument={handleReindexDocument}

@@ -12,21 +12,33 @@ import {
   UploadCloud,
   CheckCircle2,
   Trash2,
+  X,
 } from 'lucide-react';
 import { KnowledgeDocument } from '../types';
 
 interface KnowledgeBaseViewProps {
   documents: KnowledgeDocument[];
   onUploadDocument?: (file: File) => void;
+  onAddTextDocument?: (title: string, text: string, category: string) => void;
   onDeleteDocument?: (id: string) => void;
   onDownloadDocument?: (doc: KnowledgeDocument) => void;
   onReindexDocument?: (id: string) => Promise<void>;
   isUploading?: boolean;
 }
 
+const TEXT_CATEGORIES = [
+  'PROCÉDURES SYSCOHADA',
+  'Normes comptables',
+  'Fiscalité',
+  'Procédures internes',
+  'Social & Paie',
+  'RÉFÉRENCES',
+];
+
 export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
   documents,
   onUploadDocument,
+  onAddTextDocument,
   onDeleteDocument,
   onDownloadDocument,
   onReindexDocument,
@@ -37,6 +49,31 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
   const [isReindexing, setIsReindexing] = useState(false);
   const [reindexSuccess, setReindexSuccess] = useState(false);
   const [isDragOver, setIsDragOver] = useState(false);
+  // Modale "Ajouter un texte" (2e option d'alimentation avec l'import fichier).
+  const [showTextModal, setShowTextModal] = useState(false);
+  const [textTitle, setTextTitle] = useState('');
+  const [textBody, setTextBody] = useState('');
+  const [textCategory, setTextCategory] = useState(TEXT_CATEGORIES[0]);
+  const [textError, setTextError] = useState<string | null>(null);
+
+  const handleTextImport = () => {
+    setTextError(null);
+    if (!textTitle.trim()) {
+      setTextError('Donnez un titre à votre texte.');
+      return;
+    }
+    if (textBody.trim().length < 20) {
+      setTextError('Le texte doit contenir au moins 20 caractères.');
+      return;
+    }
+    if (onAddTextDocument) {
+      onAddTextDocument(textTitle.trim(), textBody, textCategory);
+      setShowTextModal(false);
+      setTextTitle('');
+      setTextBody('');
+      setTextCategory(TEXT_CATEGORIES[0]);
+    }
+  };
 
   const getCategoryConfig = (category: string) => {
     const cat = category.toLowerCase();
@@ -424,22 +461,34 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
                 {isUploading ? 'Envoi vers le stockage sécurisé…' : 'Importez un nouveau document de référence'}
               </p>
               <p className="text-[12px] text-[#64748B] mt-1 max-w-sm">
-                Glissez-déposez vos fichiers PDF, relevés SYSCOHADA ou barèmes fiscaux ici — persistés dans Firebase Storage, visibles après refresh.
+                Glissez-déposez vos fichiers PDF, relevés SYSCOHADA ou barèmes fiscaux ici — persistés dans Firebase Storage, visibles après refresh. Ou ajoutez directement un texte.
               </p>
-              <label className={`mt-3.5 px-4 py-2 rounded-xl text-[12px] font-semibold bg-white border border-[#E2E8F0] text-[#1E293B] shadow-xs transition-colors ${isUploading ? 'opacity-50 pointer-events-none' : 'hover:bg-neutral-50 cursor-pointer'}`}>
-                <span>{isUploading ? 'Envoi en cours…' : 'Parcourir mes fichiers'}</span>
-                <input
-                  type="file"
-                  className="hidden"
-                  disabled={isUploading}
-                  onChange={(e) => {
-                    if (e.target.files && e.target.files[0] && onUploadDocument) {
-                      onUploadDocument(e.target.files[0]);
-                    }
-                    e.target.value = '';
-                  }}
-                />
-              </label>
+              <div className="mt-3.5 flex items-center justify-center gap-2 flex-wrap">
+                <label className={`px-4 py-2 rounded-xl text-[12px] font-semibold bg-white border border-[#E2E8F0] text-[#1E293B] shadow-xs transition-colors ${isUploading ? 'opacity-50 pointer-events-none' : 'hover:bg-neutral-50 cursor-pointer'}`}>
+                  <span>{isUploading ? 'Envoi en cours…' : 'Parcourir mes fichiers'}</span>
+                  <input
+                    type="file"
+                    className="hidden"
+                    disabled={isUploading}
+                    onChange={(e) => {
+                      if (e.target.files && e.target.files[0] && onUploadDocument) {
+                        onUploadDocument(e.target.files[0]);
+                      }
+                      e.target.value = '';
+                    }}
+                  />
+                </label>
+                {onAddTextDocument && (
+                  <button
+                    type="button"
+                    onClick={() => { setTextError(null); setShowTextModal(true); }}
+                    disabled={isUploading}
+                    className="px-4 py-2 rounded-xl text-[12px] font-semibold bg-black text-white shadow-xs transition-colors hover:bg-zinc-800 disabled:opacity-50 cursor-pointer"
+                  >
+                    Ajouter un texte
+                  </button>
+                )}
+              </div>
             </div>
           </div>
         </div>
@@ -452,8 +501,109 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
           <p className="text-[13px] text-[#64748B] mt-1 max-w-xs">
             Ajoutez le plan comptable SYSCOHADA ou des procédures internes pour guider vos agents IA.
           </p>
+          {onAddTextDocument && (
+            <button
+              type="button"
+              onClick={() => { setTextError(null); setShowTextModal(true); }}
+              className="mt-4 px-4 py-2 rounded-xl text-[12px] font-semibold bg-black text-white hover:bg-zinc-800 cursor-pointer"
+            >
+              Ou ajouter un texte manuellement
+            </button>
+          )}
         </div>
       )}
+
+            {/* Modale "Ajouter un texte" : titre + catégorie + texte -> Importer */}
+            {showTextModal && (
+              <div
+                className="fixed inset-0 z-[100] flex items-center justify-center p-4"
+                style={{ background: 'rgba(0,0,0,0.45)' }}
+                onClick={() => setShowTextModal(false)}
+              >
+                <div
+                  className="w-full max-w-lg bg-white rounded-2xl shadow-2xl overflow-hidden"
+                  style={{ border: '1px solid #E5E7EB' }}
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <div className="px-5 py-4 flex items-center justify-between" style={{ borderBottom: '1px solid #E5E7EB' }}>
+                    <div>
+                      <h3 className="text-[15px] font-bold text-[#1E293B]">Ajouter un texte</h3>
+                      <p className="text-[12px] text-[#64748B] mt-0.5">
+                        Stocké dans Firebase et utilisable par les agents, comme un fichier importé.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setShowTextModal(false)}
+                      className="p-1.5 rounded-lg text-[#64748B] hover:text-[#1E293B] hover:bg-[#F4F4F5]"
+                      title="Fermer"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                  <div className="p-5 space-y-3.5">
+                    <div>
+                      <label className="block text-[12px] font-semibold text-[#475569] mb-1">Titre *</label>
+                      <input
+                        type="text"
+                        value={textTitle}
+                        onChange={(e) => setTextTitle(e.target.value)}
+                        placeholder="Ex : Procédure validation des avoirs"
+                        maxLength={120}
+                        className="w-full px-3 py-2 text-[13px] bg-white border border-[#E2E8F0] rounded-xl text-[#1E293B] placeholder:text-[#94A3B8] focus:outline-none focus:border-black"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[12px] font-semibold text-[#475569] mb-1">Catégorie</label>
+                      <select
+                        value={textCategory}
+                        onChange={(e) => setTextCategory(e.target.value)}
+                        className="w-full px-3 py-2 text-[13px] bg-white border border-[#E2E8F0] rounded-xl text-[#1E293B] focus:outline-none focus:border-black cursor-pointer"
+                      >
+                        {TEXT_CATEGORIES.map((c) => (
+                          <option key={c} value={c}>{c}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="block text-[12px] font-semibold text-[#475569]">Texte * (20 caractères min)</label>
+                        <span className="text-[11px] font-mono text-[#94A3B8]">{textBody.trim().length} car.</span>
+                      </div>
+                      <textarea
+                        value={textBody}
+                        onChange={(e) => setTextBody(e.target.value)}
+                        placeholder="Collez ou tapez ici tous les textes que vous voulez : procédures internes, barèmes, règles de gestion…"
+                        rows={8}
+                        className="w-full px-3 py-2 text-[13px] bg-[#F8FAFC] border border-[#E2E8F0] rounded-xl text-[#1E293B] placeholder:text-[#94A3B8] focus:outline-none focus:border-black focus:bg-white resize-y leading-relaxed"
+                      />
+                    </div>
+                    {textError && (
+                      <div className="px-3 py-2 rounded-xl bg-[#F9FAFB] border border-[#E5E7EB] text-[12px] text-[#1F2937]">
+                        {textError}
+                      </div>
+                    )}
+                    <div className="flex items-center justify-end gap-2 pt-1">
+                      <button
+                        type="button"
+                        onClick={() => setShowTextModal(false)}
+                        className="px-4 py-2 rounded-xl text-[12px] font-semibold bg-white border border-[#E2E8F0] text-[#475569] hover:bg-[#F8FAFC] cursor-pointer"
+                      >
+                        Annuler
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleTextImport}
+                        disabled={isUploading}
+                        className="px-5 py-2 rounded-xl text-[12px] font-semibold bg-black text-white hover:bg-zinc-800 disabled:opacity-50 cursor-pointer"
+                      >
+                        {isUploading ? 'Import en cours…' : 'Importer'}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
     </div>
   );
 };

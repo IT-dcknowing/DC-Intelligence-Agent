@@ -142,6 +142,22 @@ export async function uploadKnowledge(file: File, category = 'RÉFÉRENCES'): Pr
   return mapKnowledgeDoc({ ...data.document, id: data.document.id });
 }
 
+/** Saisie manuelle de texte (120 s max : stockage + indexation serveur). */
+export async function addKnowledgeText(title: string, text: string, category = 'RÉFÉRENCES'): Promise<KnowledgeDocument> {
+  if (!title.trim() || text.trim().length < 20) {
+    throw new Error('Titre et texte (20 caractères min) requis.');
+  }
+  const data = await post<{ ok: boolean; document: any }>('/knowledge/text', {
+    title: title.trim().slice(0, 120),
+    text,
+    category,
+  }, 120000);
+  if (!data || !data.ok || !data.document) {
+    throw new Error('Échec de l’enregistrement du texte. Réessayez.');
+  }
+  return mapKnowledgeDoc({ ...data.document, id: data.document.id });
+}
+
 export async function deleteKnowledgeDoc(id: string): Promise<boolean> {
   const data = await del<{ ok: boolean }>(`/knowledge/${encodeURIComponent(id)}`);
   return Boolean(data && data.ok);

@@ -3064,6 +3064,84 @@ async function extractIndexableText(buf, mimeType, name) {
   return { text: '', reason: 'extraction non supportée (texte, PDF ou image uniquement)' };
 }
 
+// Saisie MANUELLE de texte (2e option d'alimentation : l'utilisateur tape/colle
+// un texte + titre et clique Importer). Même pipeline que l'upload fichier :
+// stockage Storage en .txt + indexation (chunks toujours, vecteurs best-effort)
+// + même format de réponse. Seuil 20 car. min (tout texte accepté est indexable).
+app.post(['/api/knowledge/text', '/knowledge/text'], async (req, res) => {
+  if (!checkRateLimit(req, res, 10)) return;
+  const { title, text, category } = req.body || {};
+  const cleanTitle = str(title, 120).trim();
+  const cleanText = String(text || '');
+  if (!cleanTitle) return res.status(400).json({ error: 'title requis (1..120 car.)' });
+  if (cleanText.trim().length < 20) return res.status(400).json({ error: 'text requis (>= 20 caractères)' });
+  if (cleanText.length > 200000) return res.status(400).json({ error: 'text trop long (max 200 000 car.)' });
+  const buf = Buffer.from(cleanText, 'utf8');
+  if (buf.length > 8_000_000) return res.status(400).json({ error: 'texte trop volumineux (max 8 Mo)' });
+  const id = `doc-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  const safeName = (cleanTitle.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 100) || 'texte') + '.txt';
+  const storagePath = `knowledge/${id}/${safeName}`;
+  const mime = 'text/plain';
+  let stored = false;
+  try {
+    await storageBucket().file(storagePath).save(buf, { metadata: { contentType: mime } });
+    stored = true;
+  } catch (e) {
+    console.warn('[KNOWLEDGE] Storage indisponible, métadonnées seules', String((e && e.message) || e).slice(0, 200));
+  }
+  const now = new Date().toISOString();
+  const indexText = cleanText.slice(0, 200000);
+  const row = {
+    title: cleanTitle,
+    category: str(category, 60) || 'RÉFÉRENCES',
+    size: formatSize(buf.length),
+    sizeBytes: buf.length,
+    mimeType: mime,
+    storagePath: stored ? storagePath : null,
+    status: 'pending',
+    chunkCount: 0,
+    indexReason: stored ? 'indexation en cours' : 'fichier non stocké — réessayez',
+    summary: `Texte saisi manuellement : ${cleanTitle}.${stored ? '' : ' (fichier non stocké — réessayez)'}`,
+    textPreview: indexText.slice(0, 4000),
+    lastUpdated: now,
+    createdAt: now,
+  };
+  try {
+    if (db) await db.collection('knowledge_documents').doc(id).set(row);
+    else memoryStore.knowledge.unshift({ id, ...row });
+  } catch (e) {
+    return res.status(500).json({ error: 'knowledge_save_failed' });
+  }
+  if (stored) {
+    try {
+      const { chunkCount, truncated, vectorsOk, vectorError } = await indexDocumentText(id, indexText);
+      if (vectorsOk) {
+        Object.assign(
+          row,
+          await setDocIndexState(id, {
+            status: truncated ? 'partial' : 'indexed',
+            chunkCount,
+            indexReason: truncated ? `texte tronqué à ${chunkCount} chunks (plafond anti-coût)` : '',
+          })
+        );
+      } else {
+        Object.assign(
+          row,
+          await setDocIndexState(id, {
+            status: 'pending',
+            chunkCount,
+            indexReason: `vecteurs en attente (${vectorError}) — recherche par mots-clés active`,
+          })
+        );
+      }
+    } catch (e) {
+      const msg = String((e && e.message) || 'indexation_echec');
+      Object.assign(row, await setDocIndexState(id, { status: 'pending', chunkCount: 0, indexReason: msg.slice(0, 200) }));
+    }
+  }
+  return res.status(200).json({ ok: true, store: db ? 'firestore' : 'memory', document: { id, ...row } });
+});
+
 app.post(['/api/knowledge/upload', '/knowledge/upload'], async (req, res) => {
   if (!checkRateLimit(req, res, 10)) return;
   const { name, mimeType, base64, category } = req.body || {};
