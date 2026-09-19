@@ -685,9 +685,13 @@ async function handleInboundMessage(wa, { wamid, from, type, msg }) {
   let waMediaBuf = null;
   let waMediaMime = '';
   let waMediaName = '';
+  // Binaire à archiver (Storage + base de connaissances). Renseigné par chaque
+  // branche média ci-dessous, consommé en fire-and-forget après classification.
+  let waArchiveBuf = null;
   try {
     if (type === 'audio' && msg.audio && msg.audio.id) {
       const buf = await withTimeout(wa.downloadMedia(msg.audio.id), 20000, 'media_timeout');
+      waArchiveBuf = buf;
       const tr = await withTimeout(transcribeAudioBuffer(buf, 'audio/ogg'), 30000, 'stt_timeout');
       extractedText = (tr.text || '').trim();
     } else if ((type === 'image' || type === 'document') && (msg.image || msg.document)) {
@@ -696,6 +700,7 @@ async function handleInboundMessage(wa, { wamid, from, type, msg }) {
       const declaredMime = (msg.image && msg.image.mime_type) || (msg.document && msg.document.mime_type) || '';
       waMediaName = (msg.document && msg.document.filename) || (type === 'image' ? 'photo WhatsApp' : 'document WhatsApp');
       const buf = await withTimeout(wa.downloadMedia(mediaId), 25000, 'media_timeout');
+      waArchiveBuf = buf;
       // MIME RÉEL par magic bytes (le déclaré Meta n'est pas fiable).
       waMediaMime = sniffMime(buf, declaredMime || (type === 'image' ? 'image/jpeg' : 'application/octet-stream'));
       if (/^image\//.test(waMediaMime)) {
@@ -742,6 +747,19 @@ async function handleInboundMessage(wa, { wamid, from, type, msg }) {
     console.warn('[WA] classification repli heuristique', String((e && e.message) || e).slice(0, 150));
   }
   console.log(`[WA STEP] wamid=${wamid} étape=classification docType=${docType} confiance=${confidence}`);
+
+  // Archivage AUTO : toute pièce reçue est conservée (Storage whatsapp/ + doc
+  // Base de connaissances lié phone+wamid). Fire-and-forget : le pipeline ne
+  // l'attend JAMAIS (il tourne en parallèle du routage/outils/composition).
+  if (hasMedia && waArchiveBuf) {
+    archiveWhatsAppMedia({
+      phone: from, wamid, kind: type, buf: waArchiveBuf,
+      mimeType: waMediaMime || 'application/octet-stream', filename: waMediaName,
+      caption: textBody, docType, extractedText,
+    }).catch((e) => {
+      console.warn('[WA-ARCHIVE] échec', String((e && e.message) || e).slice(0, 150));
+    });
+  }
 
   if (!extractedText && !hasMedia) {
     waConv.transition(conv, waConv.STATES.WAITING_USER);
@@ -2397,6 +2415,114 @@ async function waUpsertConversationInner(phone, patch = {}, lastMsg = null) {
   } catch {}
 }
 
+// ============ ARCHIVAGE AUTO WHATSAPP → STORAGE + BASE DE CONNAISSANCES ============
+// Toute pièce reçue (image / document / audio) est CONSERVÉE : binaire dans
+// Storage (whatsapp/<tel>/<wamid>/<fichier>), métadonnées + texte dans Firestore
+// (knowledge_documents, source=whatsapp, phone+wamid = lien vers la conversation).
+// → visible dans l'onglet Connaissances, téléchargeable, révisable en session
+// ultérieure ET interrogeable par les agents (RAG, même pipeline que l'upload).
+// Fire-and-forget depuis le pipeline (jamais bloquant) ; idempotent par wamid
+// (un second passage retrouve le doc et ne duplique rien).
+function buildWhatsAppArchiveMeta({ phone, wamid, kind, mimeType, filename }) {
+  const digits = String(phone || '').replace(/\D/g, '') || 'inconnu';
+  const cleanWamid = String(wamid || '').replace(/[^A-Za-z0-9_.-]/g, '_').slice(0, 120) || `noid-${Date.now()}`;
+  const rawName = String(filename || '').trim();
+  const hasExt = /\.[A-Za-z0-9]{2,5}$/.test(rawName);
+  const extByMime = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif', 'application/pdf': 'pdf', 'audio/ogg': 'ogg', 'audio/mpeg': 'mp3' };
+  const safeName = (hasExt ? rawName : `${rawName || ('whatsapp-' + kind)}.${extByMime[String(mimeType || '').toLowerCase()] || 'bin'}`)
+    .replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 120) || 'piece_whatsapp';
+  const now = new Date();
+  const stamp = `${String(now.getDate()).padStart(2, '0')}-${String(now.getMonth() + 1).padStart(2, '0')}-${now.getFullYear()}_${String(now.getHours()).padStart(2, '0')}h${String(now.getMinutes()).padStart(2, '0')}`;
+  return {
+    docId: `wa-${cleanWamid}`.slice(0, 150),
+    storagePath: `whatsapp/${digits}/${cleanWamid}/${safeName}`,
+    title: hasExt ? rawName.replace(/\.[^/.]+$/, '').slice(0, 120) : `Pièce WhatsApp ${kind} ${stamp}`,
+    safeName,
+  };
+}
+
+async function archiveWhatsAppMedia({ phone, wamid, kind, buf, mimeType, filename, caption, docType, extractedText }) {
+  if (!buf || !buf.length || buf.length > 8_000_000) return { archived: false, reason: 'binaire absent ou > 8 Mo' };
+  const meta = buildWhatsAppArchiveMeta({ phone, wamid, kind, mimeType, filename });
+  const mime = String(mimeType || 'application/octet-stream');
+  const now = new Date().toISOString();
+  // Idempotence : un wamid déjà archivé ne duplique rien.
+  try {
+    if (db) {
+      const snap = await db.collection('knowledge_documents').doc(meta.docId).get().catch(() => null);
+      if (snap && snap.exists) {
+        console.log('[WA-ARCHIVE] déjà archivé', meta.docId);
+        return { archived: true, docId: meta.docId, deduped: true };
+      }
+    } else if ((memoryStore.knowledge || []).some((d) => d.id === meta.docId)) {
+      return { archived: true, docId: meta.docId, deduped: true };
+    }
+  } catch {}
+  // 1. Binaire → Storage (le coffre-fort). Sans binaire stocké, pas de doc (honnête).
+  let stored = false;
+  try {
+    await storageBucket().file(meta.storagePath).save(buf, { metadata: { contentType: mime } });
+    stored = true;
+  } catch (e) {
+    console.warn('[WA-ARCHIVE] storage indisponible', String((e && e.message) || e).slice(0, 150));
+  }
+  if (!stored) return { archived: false, reason: 'storage indisponible' };
+  // 2. Texte indexable : transcription / extraction VLM / texte PDF déjà produits
+  // par le pipeline (aucun retraitement coûteux ici).
+  const indexText = String(extractedText || '').slice(0, 200000);
+  const dateFr = new Date().toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+  const row = {
+    title: meta.title,
+    category: 'WhatsApp',
+    size: formatSize(buf.length),
+    sizeBytes: buf.length,
+    mimeType: mime,
+    storagePath: meta.storagePath,
+    status: 'pending',
+    chunkCount: 0,
+    indexReason: indexText.trim().length >= 20 ? 'indexation en cours' : 'en attente de texte extractible',
+    summary: `Pièce reçue sur WhatsApp du ${String(phone)} le ${dateFr}${caption ? ` — « ${String(caption).slice(0, 140)} »` : ''} [docType: ${docType || 'general_query'}].`,
+    textPreview: indexText.slice(0, 4000),
+    source: 'whatsapp',
+    phone: String(phone),
+    wamid: String(wamid),
+    lastUpdated: now,
+    createdAt: now,
+  };
+  try {
+    if (db) await db.collection('knowledge_documents').doc(meta.docId).set(row);
+    else memoryStore.knowledge.unshift({ id: meta.docId, ...row });
+  } catch (e) {
+    return { archived: false, reason: 'knowledge_save_failed' };
+  }
+  // 3. Indexation two-phase (chunks toujours, vecteurs best-effort) — comme l'upload.
+  if (indexText.trim().length >= 20) {
+    try {
+      const { chunkCount, truncated, vectorsOk, vectorError } = await indexDocumentText(meta.docId, indexText);
+      if (vectorsOk) {
+        await setDocIndexState(meta.docId, {
+          status: truncated ? 'partial' : 'indexed',
+          chunkCount,
+          indexReason: truncated ? `texte tronqué à ${chunkCount} chunks (plafond anti-coût)` : '',
+        });
+      } else {
+        await setDocIndexState(meta.docId, {
+          status: 'pending',
+          chunkCount,
+          indexReason: `vecteurs en attente (${vectorError}) — recherche par mots-clés active`,
+        });
+      }
+    } catch (e) {
+      await setDocIndexState(meta.docId, {
+        status: 'pending', chunkCount: 0,
+        indexReason: String((e && e.message) || 'indexation_echec').slice(0, 200),
+      }).catch(() => {});
+    }
+  }
+  console.log(`[WA-ARCHIVE] archivé doc=${meta.docId} tel=${String(phone).slice(0, 12)} octets=${buf.length}`);
+  return { archived: true, docId: meta.docId };
+}
+
 // Enveloppe le client d'envoi : chaque message sortant est journalisé + file des morts si échec.
 function trackWaSends(wa, ctx) {
   const tracked = { ...wa };
@@ -3782,4 +3908,4 @@ exports.whatsappWebhook = functions.https.onRequest(
 );
 
 // Exportés pour tests locaux uniquement (aucun effet en prod).
-exports.__testUtils = { withTimeout, withDb, fetchUpstream, encodeOAuthState, decodeOAuthState, buildGoogleAuthUrl, GOOGLE_OAUTH_SCOPES, paramsHash, shouldEscalateClarification, computeHallucinations, chunkText, cosineSim, parseLfAsk, classifyIntentBackend, validateComptaProposalBackend, extractIndexableText, mcpDispatch, MCP_SERVER_TOOLS };
+exports.__testUtils = { withTimeout, withDb, fetchUpstream, encodeOAuthState, decodeOAuthState, buildGoogleAuthUrl, GOOGLE_OAUTH_SCOPES, paramsHash, shouldEscalateClarification, computeHallucinations, chunkText, cosineSim, parseLfAsk, classifyIntentBackend, validateComptaProposalBackend, extractIndexableText, mcpDispatch, MCP_SERVER_TOOLS, buildWhatsAppArchiveMeta };

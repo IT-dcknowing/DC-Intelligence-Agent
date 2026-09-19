@@ -15,6 +15,7 @@ import {
   X,
   Eye,
   Loader2,
+  MessageCircle,
 } from 'lucide-react';
 import { KnowledgeDocument } from '../types';
 import { downloadKnowledge, base64ToBlob } from '../services/storeApi';
@@ -192,6 +193,19 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
         textPill: 'text-zinc-800',
         borderPill: 'border-[#E4E4E7]',
         borderLeft: 'border-l-zinc-600',
+      };
+    }
+    // Pièces archivées automatiquement depuis WhatsApp (Storage whatsapp/ +
+    // doc lié phone+wamid). Pastille dédiée, même palette monochrome.
+    if (cat.includes('whatsapp')) {
+      return {
+        label: 'WHATSAPP',
+        icon: MessageCircle,
+        color: '#3F3F46',
+        bgPill: 'bg-[#F4F4F5]',
+        textPill: 'text-zinc-800',
+        borderPill: 'border-[#E4E4E7]',
+        borderLeft: 'border-l-zinc-700',
       };
     }
     return {

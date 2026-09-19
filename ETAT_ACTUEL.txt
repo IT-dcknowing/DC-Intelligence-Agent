@@ -474,12 +474,32 @@ c) Documents de reference du repo (lus par les HUMAINS et servant de base
   pending, reference, other, totalChunks, lastIndexedAt, pipeline :
   {embedModel, chunkSize, overlap, maxChunks, minScore}} (firestore ou memory).
 - Vue KnowledgeBaseView : categories monochromes (NORMES COMPTABLES /
-  FISCALITE / PROCEDURES INTERNES / SOCIAL & PAIE), recherche, reindexation
-  reelle (bouton desactive sans handler parent), upload drag&drop vers
-  Firebase Storage (persiste, visible apres refresh), suppression,
+  FISCALITE / PROCEDURES INTERNES / SOCIAL & PAIE / WHATSAPP), recherche,
+  reindexation reelle (bouton desactive sans handler parent), upload drag&drop
+  vers Firebase Storage (persiste, visible apres refresh), saisie manuelle
+  (POST /knowledge/text -> .txt stocke + meme indexation), visionneuse
+  Contenu (image/texte via download, PDF via textPreview), suppression,
   telechargement (binaire backend ou repli .txt du resume), badge
-  Indexe/Partiel/Reference/Non indexe, pastilles "Agents alimentes :
+  Indexe/Partiel/Reference/Mots-cles/Non indexe, pastilles "Agents alimentes :
   Agent Comptabilite, Agent Juridique & Fiscal".
+- ARCHITECTURE STOCKAGE (coffre vs cerveau) : bucket prive (KNOWLEDGE_BUCKET,
+  Admin SDK uniquement) avec prefixes knowledge/<id>/<fichier> (base),
+  chat/<session>/<att-id>/<fichier> (pieces chat web), whatsapp/<tel>/<wamid>/
+  <fichier> (pieces WhatsApp). Firestore = METADONNEES + texte extractible
+  (textPreview 4000 car.) + chunks RAG + messages (textes <= 500 car.) ;
+  AUCUN binaire en Firestore (inline base64 uniquement en transit vers les
+  LLM vision, jamais persiste). Firestore rules deny-all + Storage prive :
+  acces uniquement via /api (rate-limite, IDs imprevisibles) ; pas
+  d'isolation par utilisateur (design single-admin, pas de login).
+- ARCHIVAGE AUTO WHATSAPP (archiveWhatsAppMedia, fire-and-forget, jamais
+  bloquant, idempotent par wamid wa-<id>) : toute piece (image/document/audio)
+  -> Storage whatsapp/ + doc knowledge_documents {category: WhatsApp,
+  source: whatsapp, phone, wamid (LIEN conversation), summary avec tel+date+
+  legende, textPreview = transcription/extraction VLM/texte PDF} + indexation
+  two-phase (chunks toujours, vecteurs best-effort) -> visible onglet
+  Connaissances, telechargeable, revisable, interrogeable RAG. Sans binaire
+  stocke : pas de doc (honnete). Meta builder pur teste (8/8 :
+  buildWhatsAppArchiveMeta).
 
 --------------------------------------------------------------------------------
 14. PIPELINE D'ENVOI D'UN MESSAGE (handleSendMessage : brief -> streaming)
