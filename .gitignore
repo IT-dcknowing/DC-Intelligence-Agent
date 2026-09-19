@@ -1,14 +1,4 @@
-node_modules/
-build/
-dist/
-coverage/
-.DS_Store
-*.log
-.env*
-!.env.example
-# Identifiants OAuth Google téléchargés (contient le client_secret) — jamais commité.
-client_secret*.json
-# Artefacts Playwright e2e (screenshots, traces, rapports locaux)
-test-results/
-playwright-report/
-playwright/.auth/
+```
+# Documentation files
+docs/*.md
+```
