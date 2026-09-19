@@ -319,6 +319,22 @@ D. Classification bornee : appel borne a 12 s, au-dela heuristique texte seul
 - Tous les appels MCP sont journalises via logMcpCall (sans secrets) en
   localStorage dc_intelligence_mcp_log (borne 200) + miroir serveur
   POST /audit {mcpCall} (auditLog.ts:111-131).
+- TOOL REGISTRY CENTRAL (fonctions/index.js, natif multi-agents) : les agents
+  ne possedent PAS les outils, ils demandent au registre. 7 outils :
+  knowledge.search (+ core partage ragSearchCore avec la route), sheets.
+  read_range/append_rows/create_spreadsheet, docs.create_document/append_text,
+  drive.list_files. Manifests par agent (agent-router lecture seule,
+  agent-1 +ecritures Sheets, agent-2 lecture, agent-3 +Docs ; inconnu ->
+  KB seul) + permission refusee explicite. Tokens OAuth depuis le coffre
+  Firestore (getGoogleAccessToken + refresh auto + 1 rejeu sur 401).
+  Injection dynamique du prompt a chaque requete (outils + statut connecte
+  du coffre). Boucle agentique runAgenticLoop (4 rounds, 4 appels/round,
+  trace [{tool, ok}]) branchee sur /api/chat via agentId + tools ('auto' ou
+  noms) ; stream = pseudo-stream final + evenement tool_trace ; front :
+  agentId/tools/onTrace (llmService), toolTrace sur ChatMessage, ligne
+  "N outils : ..." dans la bulle. PROUVE prod : knowledge.search trace ok,
+  drive.list_files avec retry auth. Serveur MCP entrant /api/mcp (Legal Flow
+  -> nous) inchange et distinct du proxy sortant /api/mcp/call.
 
 --------------------------------------------------------------------------------
 9. TASK ENGINE (taskEngine.ts + types.ts:26-75)
