@@ -173,6 +173,12 @@ code, kbd, samp, pre, .font-mono {
 .animate-spin { animation: spin 1s linear infinite; }
 .animate-ping { animation: ping 1.2s cubic-bezier(0,0,0.2,1) infinite; }
 
+/* Logo officiel — spin élégant du chargement (rotation, pas de pulse) */
+.dc-logo-spin { animation: dc-spin 1.4s linear infinite; will-change: transform; }
+@keyframes dc-spin { to { transform: rotate(360deg); } }
+/* Fond blanc du logo fusionné avec les fonds clairs (thème clair) */
+.logo-multiply { mix-blend-mode: multiply; }
+
 /* Transcription — italique gris */
 .is-transcribing { color: #6B6B6B !important; font-style: italic; }
 

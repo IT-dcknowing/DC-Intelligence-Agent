@@ -263,6 +263,9 @@ export default function App() {
 
   // Generation and Modal state
   const [isGenerating, setIsGenerating] = useState<boolean>(false);
+  // Nom du spécialiste en cours de délégation (micro-copie du chargement :
+  // "Je délègue..." vs "Je réfléchis..."). null = traitement direct.
+  const [delegateDisplay, setDelegateDisplay] = useState<string | null>(null);
   const [isAddModelModalOpen, setIsAddModelModalOpen] = useState<boolean>(false);
   const [isRefreshingModels, setIsRefreshingModels] = useState<boolean>(false);
 
@@ -783,6 +786,9 @@ export default function App() {
       routingRes.confidence >= 0.7 &&
       !routingRes.requiresClarification;
 
+    // Micro-copie du chargement : délégation connue dès le routage.
+    setDelegateDisplay(needsDelegation ? (targetAgent.associatedSoftware || targetAgent.name) : null);
+
     const currentTask = createTask({
       agentId: needsDelegation ? targetAgent.name : visibleAgent.name,
       action: (needsDelegation
@@ -1258,6 +1264,7 @@ export default function App() {
       }
     } finally {
       setIsGenerating(false);
+      setDelegateDisplay(null);
     }
   };
 
@@ -1655,6 +1662,7 @@ export default function App() {
             onRenameSession={handleRenameSession}
             onSendMessage={handleSendMessage}
             isGenerating={isGenerating}
+            delegateName={delegateDisplay}
             models={models}
             selectedModelId={selectedModelId}
             onSelectModel={setSelectedModelId}

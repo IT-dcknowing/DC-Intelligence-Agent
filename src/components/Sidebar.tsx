@@ -19,6 +19,8 @@ import {
   X,
 } from 'lucide-react';
 import { NavigationTab, ChatSession } from '../types';
+import logoDcIntelligence from '../assets/logo-dc-intelligence.png';
+import logoElement from '../assets/logo-element.png';
 
 interface SidebarProps {
   currentTab: NavigationTab;
@@ -381,37 +383,23 @@ export const Sidebar: React.FC<SidebarProps> = ({
           style={{ borderColor: '#E5E5E7' }}
         >
           {!isCollapsed ? (
-            <div className="flex items-center gap-2.5 min-w-0">
-              <div
-                className="w-7 h-7 rounded-lg flex items-center justify-center font-bold text-[11px] tracking-tight shrink-0"
-                style={{ background: '#000', color: '#fff' }}
-              >
-                DC
-              </div>
-              <div className="min-w-0">
-                <span
-                  className="block truncate font-bold tracking-tight"
-                  style={{ fontSize: '13px', color: '#09090B' }}
-                >
-                  DC INTELLIGENCE
-                </span>
-                <span
-                  className="block truncate"
-                  style={{ fontSize: '11px', color: '#71717A', fontWeight: 500 }}
-                >
-                  Agent Studio
-                </span>
-              </div>
+            <div className="flex items-center min-w-0">
+              {/* Logo officiel DC INTELLIGENCE (fond blanc fusionné au thème clair) */}
+              <img
+                src={logoDcIntelligence}
+                alt="DC INTELLIGENCE — DC-KNOWING"
+                className="logo-multiply shrink-0"
+                style={{ height: '36px', width: 'auto', maxWidth: '190px', objectFit: 'contain', objectPosition: 'left center' }}
+              />
             </div>
           ) : (
-            <div
+            <img
+              src={logoElement}
+              alt="DC INTELLIGENCE"
               title="DC INTELLIGENCE"
-              className="w-7 h-7 rounded-lg flex items-center justify-center font-bold text-[11px] tracking-tight shrink-0 cursor-pointer"
-              style={{ background: '#000', color: '#fff' }}
+              className="w-7 h-7 rounded-lg shrink-0 cursor-pointer object-cover"
               onClick={onToggleCollapse}
-            >
-              DC
-            </div>
+            />
           )}
 
           {!isCollapsed && (

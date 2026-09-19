@@ -29,6 +29,7 @@ import {
   VoiceState,
 } from '../types';
 import { ModelSelector } from './ModelSelector';
+import logoElement from '../assets/logo-element.png';
 import { WaveformVisualizer } from './WaveformVisualizer';
 import { transcribeAudioWithGroq } from '../services/voiceService';
 import { fetchChatAttachment, chatAttachmentDataUrl } from '../services/storeApi';
@@ -271,6 +272,9 @@ interface AssistantViewProps {
   onRenameSession?: (sessionId: string, newTitle: string) => void;
   onSendMessage: (sessionId: string, text: string, file?: File) => void;
   isGenerating: boolean;
+  // Nom du spécialiste en cours de délégation (micro-copie "Je délègue...").
+  // null = traitement direct ("Je réfléchis...").
+  delegateName?: string | null;
   models: LLMModel[];
   selectedModelId: string;
   onSelectModel: (modelId: string) => void;
@@ -294,6 +298,7 @@ export const AssistantView: React.FC<AssistantViewProps> = ({
   onRenameSession,
   onSendMessage,
   isGenerating,
+  delegateName = null,
   models,
   selectedModelId,
   onSelectModel,
@@ -724,9 +729,11 @@ export const AssistantView: React.FC<AssistantViewProps> = ({
           className="h-16 px-4 sm:px-6 border-b border-[#E2E8F0] bg-white/90 backdrop-blur-md flex items-center justify-between shrink-0 select-none z-20"
         >
           <div className="flex items-center gap-3 min-w-0">
-            <div className="w-9 h-9 rounded-xl bg-black text-white flex items-center justify-center font-bold text-sm shadow-xs border border-zinc-800 shrink-0">
-              <Sparkles className="w-4 h-4 text-white" />
-            </div>
+            <img
+              src={logoElement}
+              alt="DC Intelligence"
+              className="w-9 h-9 rounded-xl object-cover shrink-0 shadow-xs"
+            />
 
             <div className="min-w-0">
               <div className="flex items-center gap-2">
@@ -816,9 +823,11 @@ export const AssistantView: React.FC<AssistantViewProps> = ({
           {(!activeSession || activeSession.messages.length === 0) ? (
             /* Empty session state with quick accounting starters */
             <div className="max-w-2xl mx-auto py-8 text-center select-none">
-              <div className="w-12 h-12 rounded-2xl bg-zinc-100 text-black border border-zinc-200 flex items-center justify-center mx-auto mb-3">
-                <Sparkles className="w-6 h-6" />
-              </div>
+              <img
+                src={logoElement}
+                alt="DC Intelligence"
+                className="w-12 h-12 rounded-2xl object-cover mx-auto mb-3 shadow-sm"
+              />
               <h3 className="text-[18px] font-bold text-[#1E293B]">
                 Comment puis-je vous aider aujourd'hui ?
               </h3>
@@ -862,9 +871,12 @@ export const AssistantView: React.FC<AssistantViewProps> = ({
                   className={`flex gap-4 w-full message-enter ${isUser ? 'justify-end' : 'justify-start'}`}
                 >
                   {!isUser && (
-                    <div className="w-8 h-8 rounded-md bg-[#171717] text-white flex items-center justify-center font-bold text-xs shrink-0 mt-1 shadow-sm" style={{ fontFamily: "'Inter', sans-serif" }}>
-                      DC
-                    </div>
+                    <img
+                      src={logoElement}
+                      alt="DC Intelligence"
+                      title={msg.senderName}
+                      className="w-8 h-8 rounded-md object-cover shrink-0 mt-1 shadow-sm"
+                    />
                   )}
 
                   <div className={`flex flex-col ${isUser ? 'items-end' : 'items-start'} ${isUser ? 'max-w-[70%]' : 'max-w-[calc(100%-3rem)] flex-1 min-w-0'}`}>
@@ -1215,7 +1227,8 @@ export const AssistantView: React.FC<AssistantViewProps> = ({
             })
           )}
 
-          {/* Indicateur discret (§1.2) : trois points animés, SANS texte ni nom d'agent.
+          {/* Chargement : logo officiel en rotation (spin, pas de pulse) +
+              micro-copie dynamique selon l'activité de l'agent.
               Visible tant que le stream n'a pas commencé ; dès le 1er token, il disparaît. */}
           {isGenerating &&
             (() => {
@@ -1228,10 +1241,16 @@ export const AssistantView: React.FC<AssistantViewProps> = ({
               if (!waiting) return null;
               return (
                 <div className="flex gap-3 max-w-2xl mr-auto animate-in fade-in" aria-label="Réponse en cours">
-                  <div className="px-4 py-3.5 rounded-2xl bg-[#F8FAFC] border border-[#E2E8F0] rounded-tl-none flex items-center gap-1.5">
-                    <span className="typing-dot" />
-                    <span className="typing-dot" />
-                    <span className="typing-dot" />
+                  <img
+                    src={logoElement}
+                    alt=""
+                    aria-hidden
+                    className="dc-logo-spin w-8 h-8 rounded-lg object-cover shrink-0 mt-1 shadow-sm"
+                  />
+                  <div className="px-4 py-3 rounded-2xl bg-[#F8FAFC] border border-[#E2E8F0] rounded-tl-none flex items-center">
+                    <span style={{ fontFamily: "'Inter', sans-serif", fontSize: '13px', color: '#64748B' }}>
+                      {delegateName ? 'Je délègue...' : 'Je réfléchis...'}
+                    </span>
                   </div>
                 </div>
               );
