@@ -1469,7 +1469,12 @@ export default function App() {
       const doc = await uploadKnowledge(file, 'PROCÉDURES SYSCOHADA');
       setKnowledgeDocs((prev) => [doc, ...prev.filter((d) => d.id !== doc.id)]);
       const searchablePending = doc.status === 'pending' && (doc.chunkCount || 0) > 0;
-      if (doc.status === 'indexed' || doc.status === 'partial' || searchablePending) {
+      const notSearchable = (doc.chunkCount || 0) === 0;
+      if (notSearchable) {
+        // Stocké et téléchargeable, mais PAS interrogeable par les agents :
+        // le dire explicitement au lieu de promettre une "indexation à venir".
+        addToast('info', 'Fichier stocké (non interrogeable)', `${file.name} : téléchargeable et visible, mais inutilisable par les agents. ${doc.indexReason || 'Format non extractible (texte, PDF ou image uniquement).'}`);
+      } else if (doc.status === 'indexed' || doc.status === 'partial' || searchablePending) {
         addToast(
           'success',
           'Document utilisable par les agents',

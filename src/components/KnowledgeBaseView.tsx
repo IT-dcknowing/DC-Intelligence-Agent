@@ -243,6 +243,10 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
       id="knowledge-base-shell"
       className="flex-1 flex h-full min-w-0 select-none"
       style={{ fontFamily: "'Inter', sans-serif" }}
+      // Garde-fou : un dépôt hors zone ne doit JAMAIS faire naviguer le
+      // navigateur vers le fichier (page perdue). Seules les zones dédiées
+      // traitent le drop (handleDrop).
+      onDragOver={(e) => e.preventDefault()}
     >
       {/* Column 1: Document list */}
       <div
@@ -639,23 +643,52 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
           </div>
         </div>
       ) : (
-        <div className="flex-1 flex flex-col items-center justify-center p-8 text-center text-[#64748B]">
+        <div
+          className={`flex-1 flex flex-col items-center justify-center p-8 text-center transition-all rounded-2xl m-4 border-2 border-dashed ${isDragOver ? 'border-black bg-[#F4F4F5] text-[#1E293B]' : 'border-transparent text-[#64748B]'}`}
+          onDragOver={(e) => {
+            e.preventDefault();
+            setIsDragOver(true);
+          }}
+          onDragLeave={() => setIsDragOver(false)}
+          onDrop={handleDrop}
+        >
           <BookOpen className="w-12 h-12 text-[#94A3B8] mb-2" />
           <h3 className="text-[16px] font-bold text-[#1E293B]">
             Importez votre premier document
           </h3>
           <p className="text-[13px] text-[#64748B] mt-1 max-w-xs">
-            Ajoutez le plan comptable SYSCOHADA ou des procédures internes pour guider vos agents IA.
+            Glissez-déposez un fichier ici (PDF, relevés SYSCOHADA, barèmes fiscaux),
+            importez-le via le bouton, ou ajoutez un texte manuellement — tout est
+            stocké sur Firebase et utilisable par vos agents IA.
           </p>
-          {onAddTextDocument && (
-            <button
-              type="button"
-              onClick={() => { setTextError(null); setShowTextModal(true); }}
-              className="mt-4 px-4 py-2 rounded-xl text-[12px] font-semibold bg-black text-white hover:bg-zinc-800 cursor-pointer"
-            >
-              Ou ajouter un texte manuellement
-            </button>
-          )}
+          <div className="mt-4 flex items-center justify-center gap-2 flex-wrap">
+            {onUploadDocument && (
+              <label className={`px-4 py-2 rounded-xl text-[12px] font-semibold bg-white border border-[#E2E8F0] text-[#1E293B] shadow-xs transition-colors ${isUploading ? 'opacity-50 pointer-events-none' : 'hover:bg-neutral-50 cursor-pointer'}`}>
+                <span>{isUploading ? 'Envoi en cours…' : 'Importer un fichier'}</span>
+                <input
+                  type="file"
+                  className="hidden"
+                  disabled={isUploading}
+                  onChange={(e) => {
+                    if (e.target.files && e.target.files[0] && onUploadDocument) {
+                      onUploadDocument(e.target.files[0]);
+                    }
+                    e.target.value = '';
+                  }}
+                />
+              </label>
+            )}
+            {onAddTextDocument && (
+              <button
+                type="button"
+                onClick={() => { setTextError(null); setShowTextModal(true); }}
+                disabled={isUploading}
+                className="px-4 py-2 rounded-xl text-[12px] font-semibold bg-black text-white hover:bg-zinc-800 disabled:opacity-50 cursor-pointer"
+              >
+                Ou ajouter un texte manuellement
+              </button>
+            )}
+          </div>
         </div>
       )}
 
