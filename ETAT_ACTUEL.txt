@@ -466,10 +466,10 @@ c) Documents de reference du repo (lus par les HUMAINS et servant de base
    ORCHESTRATION_DC_KNOWING.md, MCP_INTEGRATION.md,
    DOSSIER_TRANSMISSION_MCP.md.
 - Base documentaire runtime : Firestore knowledge_documents + sous-collection
-  chunks (vecteurs). Seed : 4 documents de reference (Plan Comptable
-  SYSCOHADA Revise / Guide TVA & Facturation DGI CI / Procedure Cloture &
-  Rapprochement 521 / Bareme CNPS, statuts "reference" = metadonnees seules,
-  NON indexees).
+  chunks (vecteurs). AUCUN seed : INITIAL_KNOWLEDGE = [] et aucun appel
+  /knowledge/seed au demarrage (les 4 documents mockes historiques ont ete
+  supprimes ; backend vide = base vide). Statut "reference" = vestige
+  theorique (metadonnees sans fichier, NON indexees).
 - Statuts honnetes : indexed (vecteurs stockes, chunkCount), partial (texte
   tronque au plafond anti-cout), pending (attente/echec + indexReason),
   reference (seed sans fichier). Seuls indexed/partial sont interrogeables.
