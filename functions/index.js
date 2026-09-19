@@ -1424,7 +1424,9 @@ async function resolveChatImages(imagePaths) {
       } else if (mime === 'application/pdf' || /\.pdf$/i.test(name)) {
         try {
           const ext = await extractIndexableText(buf, 'application/pdf', name);
-          if (ext.text && ext.text.trim().length >= 20) {
+          // Seuil volontairement bas (tout texte non vide) : même un court extrait
+          // aide le LLM, contrairement à l'indexation RAG (seuil 20 car.).
+          if (ext.text && ext.text.trim().length > 0) {
             docTexts.push({ name, text: ext.text.slice(0, 6000) });
           } else {
             console.warn('[API CHAT] PDF sans texte extractible', name.slice(0, 80), (ext.reason || '').slice(0, 120));
@@ -3037,8 +3039,11 @@ async function extractIndexableText(buf, mimeType, name) {
       const pdfParse = require('pdf-parse');
       const parsed = await pdfParse(buf);
       const t = String((parsed && parsed.text) || '').replace(/\s+/g, ' ').trim().slice(0, 200000);
+      // Le texte est TOUJOURS renvoyé (même court) : c'est l'APPELANT qui applique
+      // son seuil (chat : tout texte non vide ; RAG : 20 car. min).
+      if (!t) return { text: '', reason: 'PDF sans texte extractible (document scanné ?)' };
       if (t.length >= 20) return { text: t, reason: '' };
-      return { text: '', reason: 'PDF sans texte extractible (document scanné ?)' };
+      return { text: t, reason: 'texte trop court pour indexation RAG (< 20 car.)' };
     } catch (e) {
       return { text: '', reason: 'extraction PDF impossible : ' + String((e && e.message) || e).slice(0, 120) };
     }
@@ -3049,8 +3054,9 @@ async function extractIndexableText(buf, mimeType, name) {
     try {
       const v = await visionClassifyBuffer(buf, mime, String(name || 'image'));
       const t = `Image ${name} : ${v.extractedText || ''} ${JSON.stringify(v.entities || {})}`.trim().slice(0, 200000);
+      if (!t) return { text: '', reason: 'VLM sans extraction exploitable' };
       if (t.length >= 20) return { text: t, reason: '' };
-      return { text: '', reason: 'VLM sans extraction exploitable' };
+      return { text: t, reason: 'extraction trop courte pour indexation RAG (< 20 car.)' };
     } catch (e) {
       return { text: '', reason: 'analyse VLM impossible : ' + String((e && e.message) || e).slice(0, 120) };
     }
