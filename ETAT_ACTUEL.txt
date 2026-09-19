@@ -981,9 +981,18 @@ ROUTES (methode, path, role, rate-limit/min) :
   WhatsApp #25D366, ni jaune #FFFBEB, ni logo Google couleur — monochrome
   #111827).
 - Animations : message-enter fadeInUp 0.4 s ; waveform 8 barres (3 px
-  #171717, durées 400-474 ms) ; typing 3 dots bounce #9CA3AF ;
-  is-transcribing italique gris ; focus-visible 2 px #171717 ; transitions
-  0.15 s, scale 0.98 au clic ; scrollbar fine #E8E8E6.
+  #171717, durées 400-474 ms) ; chargement chat = logo officiel en ROTATION
+  (.dc-logo-spin 1.4 s linear, jamais de pulse) + micro-copie dynamique
+  ("Je réfléchis..." direct / "Je délègue..." si délégation, via delegateName
+  App -> AssistantView, effacé en finally) ; typing 3 dots bounce #9CA3AF
+  (conservés en repli) ; is-transcribing italique gris ; focus-visible 2 px
+  #171717 ; transitions 0.15 s, scale 0.98 au clic ; scrollbar fine #E8E8E6.
+- Branding (src/assets/) : logo-dc-intelligence.png (logo officiel + texte
+  DC-KNOWING, fond blanc fusionné au thème clair via .logo-multiply) en
+  sidebar (h-36 px, repliée = logo-element) ; logo-element.png (triangle seul)
+  pour avatars agent (header, empty state, bulles), spinner de chargement et
+  favicon (/favicon.png, public/). Fichiers sources racine supprimés après
+  intégration (poids ~1.1 Mo, hashed par Vite, élément chargé paresseusement).
 - Titres : #111827/#09090B ; secondaires #6B7280/#64748B ; labels #A1A1AA.
   Fonds cartes : blanc + bord #E5E7EB (ou ombre douce).
 
