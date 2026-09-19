@@ -846,7 +846,9 @@ ROUTES (methode, path, role, rate-limit/min) :
   logs nombre+octets) injectees en image_url dans le DERNIER message user.
   Stream : voir §19. [30]
 . POST /route : classification unifiee {text, docType?, confidence?} ->
-  {domain, agent, confidence} (miroir routerAgent, seuils identiques). [30]
+  {domain, agent, confidence} (miroir routerAgent, seuils identiques,
+  normalisation NFD sans accents des deux cotes car \b est ASCII-only :
+  releve/ecart/echeance/collectee... matchent accentues ou non). [30]
 . POST /mcp : SERVEUR MCP ENTRANT (Legal Flow nous appelle), JSON-RPC 2.0
   initialize/tools/list/tools/call/ping, auth Bearer MCP_TOKEN (timing-safe,
   fail closed 503 si non configure). Outil lf_get_user_full_profile
